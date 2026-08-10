@@ -2334,6 +2334,18 @@ static void model_prefetch_cpu_mapping(const ds4_model *m) {
     if (!m || !m->map || m->size == 0) return;
 
     /*
+     * 8GB CPU experiment:
+     * Keep the GGUF demand-paged from NVMe instead of asking Linux
+     * to prefetch the complete model mapping.
+     */
+    const char *no_prefetch = getenv("DS4_CPU_NO_PREFETCH");
+    if (no_prefetch && strcmp(no_prefetch, "0") != 0) {
+        fprintf(stderr,
+                "ds4: CPU whole-model prefetch disabled; using demand-paged NVMe weights\n");
+        return;
+    }
+
+    /*
      * CPU generation touches expert weights according to router decisions, so a
      * long decode can fault in model pages that the prompt never touched. On
      * current Darwin kernels we have seen those late file-backed faults trigger
