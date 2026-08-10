@@ -1,3 +1,39 @@
+<!-- ds4-8gb-cpu-research-preview -->
+
+# ds4-8gb-cpu — Research Preview
+
+This repository is an experimental CPU/NVMe research fork of
+[antirez/ds4](https://github.com/antirez/ds4), focused on running very
+large DeepSeek models on memory-constrained Linux systems.
+
+**v0.1 Research Preview**
+
+The current public candidate adds two focused capabilities:
+
+- CPU support for DeepSeek V4 Flash **AProjQ4** GGUFs, where the dense
+  attention projections are stored as Q4_K.
+- An opt-in CPU demand-paging mode using `DS4_CPU_NO_PREFETCH=1` for
+  systems where the GGUF is much larger than physical RAM.
+
+The release candidate has been functionally validated with a
+**78.62 GiB DeepSeek V4 Flash GGUF**, reporting **284.33B logical
+parameters**, on a CPU-only Linux laptop with approximately **7.7 GiB
+of physical RAM**.
+
+This is a research preview, not a claim that the model fits entirely
+in RAM and not a production-performance guarantee. Model weights are
+not distributed with this repository.
+
+Research, integration, benchmarking, and release work: **Mutaz Abubaker**.
+
+Research and port assistance: **ChatGPT (GPT-5.6 Sol)**.
+
+---
+
+## Upstream DwarfStar Documentation
+
+The original upstream README is preserved below.
+
 <p align="center">
   <img src="logo.svg" alt="DwarfStar logo" width="220">
 </p>
