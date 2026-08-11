@@ -31,6 +31,7 @@ This register separates verified public-release evidence from historical researc
 | E-014 | V16.3 swappiness 100 vs 200 | STRONG-HISTORICAL | Historical follow-up |
 | E-015 | V16.4 swappiness 150 vs 175 with full swap reset | INCONCLUSIVE | Historical follow-up |
 | E-016 | V16.5 swappiness 175 vs 188 with full swap reset | INCONCLUSIVE | Historical follow-up |
+| E-017 | V16.6 swappiness 175 vs 182 with full swap reset | INCONCLUSIVE | Historical follow-up |
 
 ## E-010 — Linux VM Swappiness 10 vs 100
 
@@ -1302,3 +1303,126 @@ The local research summary remains outside the public repository.
 E-016 is historical system-tuning evidence.
 
 It does not establish an optimal Linux swappiness value for other hardware, kernels, storage devices, memory capacities, swap configurations, model formats, or workloads.
+
+## E-017 — V16.6 Swappiness 175 vs 182
+
+### Classification
+
+- Status: `INCONCLUSIVE`
+- Interpretation: effectively neutral between swappiness 175 and 182
+- Scope: historical Linux VM follow-up experiment
+- Backend: CPU only
+- Comparison: `vm.swappiness=175` vs `vm.swappiness=182`
+- Balanced paired runs: 4
+- Sustained measurement window: decode evaluations 2 through 19
+- Output parity: identical across all eight runs
+- Reset methodology: full disk-swap and zram reset procedure before every run
+- Public-release relationship: historical follow-up evidence; not a current v0.1 performance claim
+
+### Controlled Reset
+
+V16.6 retained the strengthened swap-reset methodology used in V16.4 and V16.5.
+
+Pre-run residual swap usage remained extremely small:
+
+| Run | Disk swap | ZRAM |
+| --- | ---: | ---: |
+| 1-A175 | 0.000 MiB | 0.000 MiB |
+| 1-B182 | 0.000 MiB | 0.250 MiB |
+| 2-A175 | 0.000 MiB | 0.000 MiB |
+| 2-B182 | 0.000 MiB | 0.000 MiB |
+| 3-A175 | 0.000 MiB | 0.000 MiB |
+| 3-B182 | 0.250 MiB | 0.000 MiB |
+| 4-A175 | 0.000 MiB | 0.000 MiB |
+| 4-B182 | 0.250 MiB | 0.000 MiB |
+
+All residual values were far below the predefined 16 MiB reset tolerance.
+
+### Steady-Decode Result
+
+| Pair | Swappiness 175 | Swappiness 182 | Change |
+| --- | ---: | ---: | ---: |
+| 1 | 3105.582 ms | 3216.106 ms | +3.56% |
+| 2 | 3251.928 ms | 3163.885 ms | -2.71% |
+| 3 | 3255.752 ms | 3340.080 ms | +2.59% |
+| 4 | 3446.469 ms | 3403.626 ms | -1.24% |
+| Mean | 3264.933 ms | 3280.924 ms | +0.49% |
+
+A175 wins:
+
+`2/4`
+
+B182 wins:
+
+`2/4`
+
+Paired mean difference:
+
+`+15.992 ms`
+
+Paired 95% confidence interval:
+
+`[-137.436, +169.419] ms`
+
+The pair split was even, the mean difference was small, and the paired confidence interval crossed zero by a wide margin.
+
+The sustained result therefore remains `INCONCLUSIVE`.
+
+### VM / Memory-Pressure Result
+
+Mean changes for swappiness 182 relative to 175:
+
+| Metric | Change |
+| --- | ---: |
+| Major faults | +10.25% |
+| File refaults | -3.47% |
+| kswapd scan | -1.32% |
+| kswapd steal | -2.04% |
+| Direct scan | +1.06% |
+| Direct steal | -7.81% |
+| Swap-in | +11.95% |
+| Swap-out | +6.37% |
+| Memory PSI some | -1.99% |
+| Memory PSI full | -1.98% |
+| ZRAM growth | +0.36% |
+
+The VM signal is mixed.
+
+Swappiness 182 increased major faults and swap traffic while reducing file refaults, some reclaim activity, and measured memory PSI.
+
+No single VM mechanism reliably distinguishes 182 from 175 in this experiment.
+
+### Interpretation
+
+Swappiness 175 and 182 produced effectively equivalent sustained-decode performance in this four-pair comparison.
+
+The pair split was 2/4 versus 2/4 and mean steady decode differed by only 0.49%.
+
+There is no reliable evidence from V16.6 that swappiness 182 is faster or slower than 175.
+
+Under this tested configuration, the range from approximately 175 through 182 currently behaves like a performance plateau rather than a clearly ordered optimum.
+
+Combined with the neighboring experiments:
+
+- swappiness 150 to 175 favored 175 in 4/4 pairs but remained inconclusive
+- swappiness 175 to 182 was effectively neutral
+- swappiness 175 to 188 favored 175 in 4/4 pairs but remained inconclusive
+- swappiness 200 previously produced a strong sustained-decode regression
+
+The current degradation-onset bracket is therefore approximately swappiness 182 to 188 for this tested workload.
+
+### Sanitized Numeric Source
+
+`benchmarks/v16.6-swappiness-175-vs-182.csv`
+
+### Local Evidence Hash
+
+The local research summary remains outside the public repository.
+
+`d94a68305e838fa13fea9c6587ac1bd313f9e09afc5881cf4889749ea7f3cc67`
+
+### Claim Boundary
+
+E-017 is historical system-tuning evidence.
+
+It does not establish an optimal Linux swappiness value or a universal plateau for other hardware, kernels, storage devices, memory capacities, swap configurations, model formats, or workloads.
