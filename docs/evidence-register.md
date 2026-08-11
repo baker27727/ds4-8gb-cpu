@@ -33,6 +33,7 @@ This register separates verified public-release evidence from historical researc
 | E-016 | V16.5 swappiness 175 vs 188 with full swap reset | INCONCLUSIVE | Historical follow-up |
 | E-017 | V16.6 swappiness 175 vs 182 with full swap reset | INCONCLUSIVE | Historical follow-up |
 | E-018 | V16.7 swappiness 182 vs 185 with full swap reset | INCONCLUSIVE | Historical follow-up |
+| E-019 | V16.8R qualified swappiness 185 vs 187 rerun | INCONCLUSIVE | Historical follow-up |
 
 ## E-010 — Linux VM Swappiness 10 vs 100
 
@@ -1574,3 +1575,174 @@ The local research summary remains outside the public repository.
 E-018 is historical system-tuning evidence.
 
 It does not establish an optimal Linux swappiness value, a universal plateau, or a universal first-token threshold for other systems or workloads.
+
+## E-019 — V16.8R Qualified Swappiness 185 vs 187
+
+### Classification
+
+- Status: `INCONCLUSIVE`
+- Primary metric: sustained decode
+- Interpretation: effectively neutral between swappiness 185 and 187
+- Backend: CPU only
+- Comparison: `vm.swappiness=185` vs `vm.swappiness=187`
+- Balanced accepted pairs: 4
+- Sustained measurement window: decode evaluations 2 through 19
+- Output parity: identical across all accepted runs
+- Qualified pre-run swap gate: total swap `<= 16 MiB`
+- Maximum attempts per run: 3
+- Public-release relationship: historical follow-up evidence; not a current v0.1 performance claim
+
+### Why V16.8 Was Repeated
+
+The original V16.8 comparison was not used as primary evidence because some runs exceeded the predefined pre-run swap threshold.
+
+Two original swappiness-187 runs entered the workload with approximately 83 to 90 MiB of pre-existing zram use.
+
+V16.8R therefore repeated the same 185-versus-187 comparison with a final qualification gate immediately before `ds4` execution.
+
+Any attempt exceeding 16 MiB total swap was rejected and reset before retry.
+
+### Qualification Behavior
+
+Accepted attempts:
+
+| Run | Accepted attempt |
+| --- | ---: |
+| 1-A185 | 1 |
+| 1-B187 | 1 |
+| 2-A185 | 1 |
+| 2-B187 | 1 |
+| 3-A185 | 2 |
+| 3-B187 | 2 |
+| 4-A185 | 2 |
+| 4-B187 | 1 |
+
+Rejected pre-run attempts included:
+
+- 3-A185 attempt 1: approximately 80.3 MiB zram
+- 3-B187 attempt 1: approximately 99.8 MiB zram
+- 4-A185 attempt 1: approximately 71.8 MiB zram
+
+The excursions therefore occurred at both swappiness settings and were not specific to 187.
+
+All accepted runs satisfied the pre-run swap qualification gate.
+
+### Sustained Decode
+
+| Pair | Swappiness 185 | Swappiness 187 | Change |
+| --- | ---: | ---: | ---: |
+| 1 | 3085.875 ms | 3202.932 ms | +3.79% |
+| 2 | 3388.682 ms | 3309.777 ms | -2.33% |
+| 3 | 3363.707 ms | 3479.334 ms | +3.44% |
+| 4 | 3574.577 ms | 3560.325 ms | -0.40% |
+| Mean | 3353.210 ms | 3388.092 ms | +1.04% |
+
+A185 wins:
+
+`2/4`
+
+B187 wins:
+
+`2/4`
+
+Paired mean difference:
+
+`+34.882 ms`
+
+Paired 95% confidence interval:
+
+`[-120.576, +190.339] ms`
+
+The pair split was even, the mean difference was small, and the confidence interval crossed zero widely.
+
+The sustained-decode result is therefore `INCONCLUSIVE` and effectively neutral.
+
+### First Decode
+
+| Pair | Swappiness 185 | Swappiness 187 |
+| --- | ---: | ---: |
+| 1 | 3286.367 ms | 3942.584 ms |
+| 2 | 3643.435 ms | 3817.967 ms |
+| 3 | 3369.321 ms | 3824.250 ms |
+| 4 | 4125.780 ms | 4078.097 ms |
+| Mean | 3606.226 ms | 3915.725 ms |
+
+Mean difference:
+
+`+309.499 ms`
+
+Relative difference:
+
+`+8.58%`
+
+A185 wins:
+
+`3/4`
+
+Paired 95% confidence interval:
+
+`[-182.803, +801.800] ms`
+
+The first-decode result is also inconclusive.
+
+### VM / Memory-Pressure Result
+
+Mean changes for swappiness 187 relative to 185:
+
+| Metric | Change |
+| --- | ---: |
+| Major faults | +0.14% |
+| File refaults | +2.89% |
+| kswapd scan | -1.59% |
+| kswapd steal | +2.02% |
+| Direct scan | -5.54% |
+| Direct steal | -0.78% |
+| Swap-in | -0.19% |
+| Swap-out | -0.48% |
+| Memory PSI some | +0.86% |
+| Memory PSI full | +0.90% |
+| ZRAM growth | -0.57% |
+
+Whole-run VM, swap, and PSI behavior was broadly similar between the two accepted groups.
+
+No clear VM-pressure cliff was observed at swappiness 187.
+
+### Interpretation
+
+After enforcing a qualified pre-run swap gate, swappiness 185 and 187 produced effectively equivalent sustained-decode behavior.
+
+The pair split was 2/4 versus 2/4 and the mean difference was only 1.04%.
+
+The paired confidence interval crossed zero widely.
+
+The original uncontrolled V16.8 comparison is therefore not used as the primary 185-versus-187 result.
+
+V16.8R replaces it as the controlled comparison.
+
+Combined fine-grained evidence now indicates:
+
+- swappiness 175 to 182: effectively neutral
+- swappiness 182 to 185: effectively neutral for sustained decode
+- swappiness 185 to 187: effectively neutral in the qualified rerun
+- swappiness 175 to 188: unfavorable at 188 in 4/4 pairs but statistically inconclusive
+- swappiness 200: strong sustained-decode regression
+
+The current candidate sustained-degradation onset bracket is approximately swappiness 187 to 188.
+
+A direct 187-versus-188 comparison is still required before treating that bracket as established.
+
+### Sanitized Numeric Source
+
+`benchmarks/v16.8r-swappiness-185-vs-187.csv`
+
+### Local Evidence Hash
+
+The local research summary remains outside the public repository.
+
+`903f18e6d533c4f54326ddd686b997772fe6d7db92570615664913048b2f2b74`
+
+### Claim Boundary
+
+E-019 is historical system-tuning evidence.
+
+It does not establish an optimal Linux swappiness value or a universal degradation threshold for other systems, kernels, storage devices, memory capacities, swap configurations, models, or workloads.

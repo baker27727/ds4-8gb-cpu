@@ -116,8 +116,10 @@ V16.6 compared swappiness 175 versus 182 under the same strengthened reset metho
 
 V16.7 compared swappiness 182 versus 185 with a fully clean pre-run swap baseline in all eight runs. Sustained decode remained effectively neutral: swappiness 185 was 0.92% slower on the mean, with a 2/4 versus 2/4 pair split and a wide confidence interval crossing zero. First decode showed a separate strong unfavorable signal at 185, with 182 winning all four pairs and the paired confidence interval excluding zero. The primary sustained-decode classification remains `INCONCLUSIVE`. The current sustained-degradation onset bracket is narrowed approximately to swappiness 185 through 188.
 
-Taken together, the historical evidence shows an effectively neutral sustained-decode region from approximately swappiness 175 through 185, an unfavorable but inconclusive sustained trend at 188, and a strong regression at 200. The current sustained-degradation onset bracket is approximately 185 to 188 for the tested workload, while the exact optimum remains unresolved.
+V16.8R repeated the swappiness 185 versus 187 comparison with an explicit pre-run swap qualification gate of 16 MiB. Attempts above the gate were rejected and retried. Accepted runs remained effectively neutral for sustained decode: swappiness 187 was 1.04% slower on the mean, with a 2/4 versus 2/4 pair split and a wide paired confidence interval crossing zero. VM and PSI behavior was also broadly similar. The result is classified as `INCONCLUSIVE`. The candidate sustained-degradation onset bracket is now approximately swappiness 187 through 188, pending a direct 187-versus-188 comparison.
+
+Taken together, the historical evidence shows an effectively neutral sustained-decode region from approximately swappiness 175 through 187, an unfavorable but inconclusive sustained trend at 188, and a strong regression at 200. The current candidate sustained-degradation onset bracket is approximately 187 to 188 for the tested workload, pending direct confirmation.
 
 These experiments reset zram and dropped filesystem caches, but V16.2 and V16.3 did not fully clear the disk-backed swapfile between every run. They remain historical research evidence and are not promoted into the current v0.1 public performance claim.
 
-See `docs/evidence-register.md` entries E-010, E-013, E-014, E-015, E-016, E-017, and E-018 for classification and claim boundaries.
+See `docs/evidence-register.md` entries E-010, E-013, E-014, E-015, E-016, E-017, E-018, and E-019 for classification and claim boundaries.
