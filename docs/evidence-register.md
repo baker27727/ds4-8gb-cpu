@@ -29,6 +29,7 @@ This register separates verified public-release evidence from historical researc
 | E-012 | Public v0.1 controlled cold first-token validation | VERIFIED-PUBLIC | Core v0.1 |
 | E-013 | V16.2 swappiness 100 vs 150 | INCONCLUSIVE | Historical follow-up |
 | E-014 | V16.3 swappiness 100 vs 200 | STRONG-HISTORICAL | Historical follow-up |
+| E-015 | V16.4 swappiness 150 vs 175 with full swap reset | INCONCLUSIVE | Historical follow-up |
 
 ## E-010 — Linux VM Swappiness 10 vs 100
 
@@ -1074,3 +1075,118 @@ Sanitized numeric source:
 ### Claim Boundary
 
 E-014 is historical system-tuning evidence. It does not establish an optimal Linux swappiness value for other machines, kernels, storage devices, memory sizes, model formats, or workloads.
+
+## E-015 — V16.4 Swappiness 150 vs 175
+
+### Classification
+
+- Status: `INCONCLUSIVE`
+- Scope: historical Linux VM follow-up experiment
+- Backend: CPU only
+- Comparison: `vm.swappiness=150` vs `vm.swappiness=175`
+- Balanced paired runs: 4
+- Sustained measurement window: decode evaluations 2 through 19
+- Output parity: identical across all eight runs
+- Reset methodology: full reset of both disk-backed swap and zram before every run
+- Public-release relationship: historical follow-up evidence; not a current v0.1 performance claim
+
+### Controlled Reset
+
+V16.4 strengthened the VM methodology used in earlier V16 experiments.
+
+Before every run:
+
+- zram swap was disabled,
+- the disk-backed swapfile was disabled,
+- all swapped pages were returned to RAM,
+- the disk swapfile was re-enabled empty,
+- zram was re-enabled empty,
+- filesystem caches were dropped,
+- and only then was the test swappiness value applied.
+
+Recorded pre-run swap usage was `0 B` for both swap tiers in all eight runs.
+
+### Steady-Decode Result
+
+| Pair | Swappiness 150 | Swappiness 175 | Change |
+| --- | ---: | ---: | ---: |
+| 1 | 3227.757 ms | 3193.284 ms | -1.07% |
+| 2 | 3399.986 ms | 3222.583 ms | -5.22% |
+| 3 | 3350.355 ms | 3336.179 ms | -0.42% |
+| 4 | 3353.080 ms | 3293.923 ms | -1.76% |
+| Mean | 3332.794 ms | 3261.492 ms | -2.14% |
+
+B175 wins:
+
+`4/4`
+
+Paired mean difference:
+
+`-71.302 ms`
+
+Paired 95% confidence interval:
+
+`[-187.598, +44.995] ms`
+
+The direction favored swappiness 175 in every pair, but the paired confidence interval crossed zero.
+
+The result therefore remains `INCONCLUSIVE`.
+
+### VM / Memory-Pressure Result
+
+Mean counter changes for swappiness 175 relative to 150:
+
+| Metric | Change |
+| --- | ---: |
+| Major faults | +12.41% |
+| File refaults | -11.91% |
+| kswapd scan | -3.10% |
+| kswapd steal | -9.04% |
+| Direct scan | +7.57% |
+| Direct steal | +13.19% |
+| Swap-in | +19.41% |
+| Swap-out | +9.65% |
+| Memory PSI some | -12.52% |
+| Memory PSI full | -12.46% |
+| ZRAM growth | +0.70% |
+
+The VM signal is mixed.
+
+Swappiness 175 reduced file refaults, kswapd activity, and measured memory PSI, while increasing major faults, direct reclaim, and swap traffic.
+
+This is consistent with a redistribution of memory pressure rather than a universal reduction in VM work.
+
+### Interpretation
+
+Swappiness 175 produced lower sustained-decode latency in all four balanced pairs under the strengthened full-reset methodology.
+
+However, the paired 95% confidence interval crossed zero, so V16.4 does not establish a reliable speed improvement.
+
+The result supports a consistent favorable trend toward 175 on this tested system and workload.
+
+Combined V16 evidence now indicates:
+
+- swappiness 10 to 100: strong historical improvement
+- swappiness 100 to 150: favorable but inconclusive
+- swappiness 150 to 175: favorable in 4/4 pairs but inconclusive
+- swappiness 100 to 200: strong sustained-decode regression
+
+The degradation boundary is therefore bracketed between swappiness 175 and 200 for the tested workload.
+
+This does not establish swappiness 175 as an optimum.
+
+### Sanitized Numeric Source
+
+`benchmarks/v16.4-swappiness-150-vs-175.csv`
+
+### Local Evidence Hash
+
+The local research summary is retained outside the public repository.
+
+`e1d3bcf7b91c56d9d1c59731cb3eff9112fd48b8aea188f5c354561b8dc7b6d8`
+
+### Claim Boundary
+
+E-015 is historical system-tuning evidence.
+
+It does not establish an optimal Linux swappiness value for other machines, kernels, RAM capacities, storage devices, swap configurations, model formats, or workloads.
