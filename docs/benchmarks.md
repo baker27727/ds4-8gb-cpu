@@ -110,8 +110,10 @@ V16.3 compared swappiness 100 versus 200. Swappiness 200 regressed sustained dec
 
 V16.4 compared swappiness 150 versus 175 using a strengthened full swap-tier reset before every run. Swappiness 175 reduced mean steady-decode latency by 2.14% and won all four balanced pairs, but the paired 95% confidence interval crossed zero. The result is classified as `INCONCLUSIVE`. The experiment brackets the observed degradation boundary between swappiness 175 and 200 without establishing an optimum.
 
-Taken together, the historical evidence shows favorable behavior through swappiness 175 and a strong regression at 200. The degradation boundary is therefore bracketed between 175 and 200 for the tested workload, while the exact optimum remains unresolved.
+V16.5 narrowed the upper region by comparing swappiness 175 versus 188 using the same full swap-tier reset. Swappiness 188 was 2.24% slower on mean steady decode and lost all four balanced pairs, but the paired 95% confidence interval again crossed zero. The result is classified as `INCONCLUSIVE`. Together with V16.4, this places the current candidate turnover region approximately between swappiness 175 and 188 without establishing 175 as an optimum.
+
+Taken together, the historical evidence shows favorable behavior through swappiness 175, an unfavorable but inconclusive trend at 188, and a strong regression at 200. The current candidate turnover region is approximately 175 to 188 for the tested workload, while the exact optimum remains unresolved.
 
 These experiments reset zram and dropped filesystem caches, but V16.2 and V16.3 did not fully clear the disk-backed swapfile between every run. They remain historical research evidence and are not promoted into the current v0.1 public performance claim.
 
-See `docs/evidence-register.md` entries E-010, E-013, E-014, and E-015 for classification and claim boundaries.
+See `docs/evidence-register.md` entries E-010, E-013, E-014, E-015, and E-016 for classification and claim boundaries.

@@ -1,0 +1,6 @@
+pair,a_swappiness,b_swappiness,a_decode_ms,b_decode_ms,decode_change_pct,output_sha256,output_identical,full_swap_reset
+1,175,188,3067.455,3235.679,+5.48,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,true,true
+2,175,188,3213.748,3267.598,+1.68,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,true,true
+3,175,188,3250.521,3306.234,+1.71,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,true,true
+4,175,188,3360.558,3371.811,+0.33,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,true,true
+pooled,175,188,3223.071,3295.331,+2.24,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,true,true

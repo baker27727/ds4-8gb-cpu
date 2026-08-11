@@ -30,6 +30,7 @@ This register separates verified public-release evidence from historical researc
 | E-013 | V16.2 swappiness 100 vs 150 | INCONCLUSIVE | Historical follow-up |
 | E-014 | V16.3 swappiness 100 vs 200 | STRONG-HISTORICAL | Historical follow-up |
 | E-015 | V16.4 swappiness 150 vs 175 with full swap reset | INCONCLUSIVE | Historical follow-up |
+| E-016 | V16.5 swappiness 175 vs 188 with full swap reset | INCONCLUSIVE | Historical follow-up |
 
 ## E-010 — Linux VM Swappiness 10 vs 100
 
@@ -1190,3 +1191,114 @@ The local research summary is retained outside the public repository.
 E-015 is historical system-tuning evidence.
 
 It does not establish an optimal Linux swappiness value for other machines, kernels, RAM capacities, storage devices, swap configurations, model formats, or workloads.
+
+## E-016 — V16.5 Swappiness 175 vs 188
+
+### Classification
+
+- Status: `INCONCLUSIVE`
+- Scope: historical Linux VM follow-up experiment
+- Backend: CPU only
+- Comparison: `vm.swappiness=175` vs `vm.swappiness=188`
+- Balanced paired runs: 4
+- Sustained measurement window: decode evaluations 2 through 19
+- Output parity: identical across all eight runs
+- Reset methodology: full disk-swap and zram reset before every run
+- Public-release relationship: historical follow-up evidence; not a current v0.1 performance claim
+
+### Controlled Reset
+
+V16.5 retained the strengthened full swap-tier reset introduced in V16.4.
+
+The disk-backed swapfile started at `0 B` in all eight runs.
+
+Seven runs also started with zram at `0 MiB`.
+
+Pair 4 A175 recorded approximately `0.250 MiB` of zram use before the workload. This remained well inside the predefined reset tolerance and is retained here as a methodology detail rather than hidden.
+
+### Steady-Decode Result
+
+| Pair | Swappiness 175 | Swappiness 188 | Change |
+| --- | ---: | ---: | ---: |
+| 1 | 3067.455 ms | 3235.679 ms | +5.48% |
+| 2 | 3213.748 ms | 3267.598 ms | +1.68% |
+| 3 | 3250.521 ms | 3306.234 ms | +1.71% |
+| 4 | 3360.558 ms | 3371.811 ms | +0.33% |
+| Mean | 3223.071 ms | 3295.331 ms | +2.24% |
+
+A175 wins:
+
+`4/4`
+
+B188 wins:
+
+`0/4`
+
+Paired mean difference:
+
+`+72.260 ms`
+
+Paired 95% confidence interval:
+
+`[-34.655, +179.175] ms`
+
+Every pair favored swappiness 175, but the paired confidence interval crossed zero.
+
+The sustained result therefore remains `INCONCLUSIVE`.
+
+### VM / Memory-Pressure Result
+
+Mean changes for swappiness 188 relative to 175:
+
+| Metric | Change |
+| --- | ---: |
+| Major faults | +22.95% |
+| File refaults | +1.16% |
+| kswapd scan | -1.85% |
+| kswapd steal | +1.43% |
+| Direct scan | -8.06% |
+| Direct steal | -5.48% |
+| Swap-in | +29.66% |
+| Swap-out | +15.70% |
+| Memory PSI some | +2.82% |
+| Memory PSI full | +2.79% |
+| ZRAM growth | -0.43% |
+
+The VM signal is mixed.
+
+Swappiness 188 produced substantially more major faults and swap traffic, together with slightly higher memory PSI, while some direct reclaim counters decreased.
+
+These observations support a change in reclaim behavior but do not establish a single causal mechanism for the decode-latency difference.
+
+### Interpretation
+
+Swappiness 188 produced slower steady-decode latency than 175 in all four balanced pairs.
+
+However, the paired 95% confidence interval crossed zero, so V16.5 does not establish a statistically reliable regression at 188.
+
+Combined with V16.4:
+
+- swappiness 150 to 175 favored 175 in 4/4 pairs
+- swappiness 175 to 188 favored 175 in 4/4 pairs
+- both comparisons remained statistically inconclusive
+- swappiness 200 had previously produced a strong sustained-decode regression
+
+The current candidate turnover region is therefore approximately swappiness 175 to 188 for this tested workload.
+
+Swappiness 175 is the strongest candidate point observed so far, but it is not established as an optimum.
+
+### Sanitized Numeric Source
+
+`benchmarks/v16.5-swappiness-175-vs-188.csv`
+
+### Local Evidence Hash
+
+The local research summary remains outside the public repository.
+
+`83dd8f5d548781c2e25ec1fdb755a3bd3047ff6ad22b8114eaae320f429518e2`
+
+### Claim Boundary
+
+E-016 is historical system-tuning evidence.
+
+It does not establish an optimal Linux swappiness value for other hardware, kernels, storage devices, memory capacities, swap configurations, model formats, or workloads.
