@@ -1,0 +1,205 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1200"
+  height="520"
+  viewBox="0 0 1200 520"
+  role="img"
+  aria-labelledby="title desc"
+>
+  <title id="title">DeepSeek V4 Flash on 8 GB RAM benchmark card</title>
+  <desc id="desc">
+    Controlled CPU-only cold first-token validation of a 78.62 GiB
+    DeepSeek V4 Flash GGUF on a Linux laptop with 7.7 GiB physical RAM.
+  </desc>
+
+  <rect width="1200" height="520" rx="28" fill="#0d1117"/>
+
+  <text
+    x="60"
+    y="74"
+    fill="#8b949e"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="24"
+    font-weight="700"
+    letter-spacing="2"
+  >
+    DS4-8GB-CPU · RESEARCH PREVIEW
+  </text>
+
+  <text
+    x="60"
+    y="132"
+    fill="#f0f6fc"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="42"
+    font-weight="700"
+  >
+    DeepSeek V4 Flash on 8 GB RAM
+  </text>
+
+  <text
+    x="60"
+    y="174"
+    fill="#8b949e"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="23"
+  >
+    CPU-only · NVMe-backed demand paging · controlled public validation
+  </text>
+
+  <line
+    x1="60"
+    y1="210"
+    x2="1140"
+    y2="210"
+    stroke="#30363d"
+    stroke-width="2"
+  />
+
+  <text
+    x="60"
+    y="270"
+    fill="#58a6ff"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="42"
+    font-weight="700"
+  >
+    78.62 GiB
+  </text>
+
+  <text
+    x="60"
+    y="305"
+    fill="#8b949e"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="20"
+  >
+    GGUF
+  </text>
+
+  <text
+    x="330"
+    y="270"
+    fill="#58a6ff"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="42"
+    font-weight="700"
+  >
+    7.7 GiB
+  </text>
+
+  <text
+    x="330"
+    y="305"
+    fill="#8b949e"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="20"
+  >
+    PHYSICAL RAM
+  </text>
+
+  <text
+    x="570"
+    y="270"
+    fill="#58a6ff"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="42"
+    font-weight="700"
+  >
+    284.33B
+  </text>
+
+  <text
+    x="570"
+    y="305"
+    fill="#8b949e"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="20"
+  >
+    LOGICAL PARAMETERS
+  </text>
+
+  <text
+    x="890"
+    y="270"
+    fill="#3fb950"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="42"
+    font-weight="700"
+  >
+    5.33 s
+  </text>
+
+  <text
+    x="890"
+    y="305"
+    fill="#8b949e"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="20"
+  >
+    COLD FIRST TOKEN
+  </text>
+
+  <rect
+    x="60"
+    y="350"
+    width="1080"
+    height="92"
+    rx="16"
+    fill="#161b22"
+    stroke="#30363d"
+  />
+
+  <text
+    x="90"
+    y="390"
+    fill="#f0f6fc"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="22"
+    font-weight="700"
+  >
+    CPU ONLY · NO GPU
+  </text>
+
+  <text
+    x="430"
+    y="390"
+    fill="#3fb950"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="22"
+    font-weight="700"
+  >
+    0 PROCESS SWAPS
+  </text>
+
+  <text
+    x="770"
+    y="390"
+    fill="#f0f6fc"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="22"
+    font-weight="700"
+  >
+    MMAP + NVMe
+  </text>
+
+  <text
+    x="90"
+    y="423"
+    fill="#8b949e"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="17"
+  >
+    Controlled cold first-token diagnostic — not a sustained-generation benchmark
+  </text>
+
+  <text
+    x="60"
+    y="486"
+    fill="#6e7681"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="17"
+  >
+    baker27727/ds4-8gb-cpu · v0.1 Research Preview
+  </text>
+</svg>

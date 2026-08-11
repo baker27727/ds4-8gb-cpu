@@ -1,28 +1,93 @@
 <!-- ds4-8gb-cpu-research-preview -->
 
-# ds4-8gb-cpu — Research Preview
+# DeepSeek V4 Flash on 8 GB RAM — CPU-only, NVMe-backed
 
-This repository is an experimental CPU/NVMe research fork of
-[antirez/ds4](https://github.com/antirez/ds4), focused on running very
-large DeepSeek models on memory-constrained Linux systems.
+**Run a 78.62 GiB DeepSeek V4 Flash GGUF on a Linux laptop with 7.7 GiB of physical RAM and no GPU, using mmap-backed NVMe demand paging.**
+
+<p align="center">
+  <img src="docs/assets/benchmark-card.svg" alt="DeepSeek V4 Flash on 8 GB RAM benchmark card" width="100%">
+</p>
+
+> [!IMPORTANT]
+> **The model does not fit entirely in 8 GB of RAM.**
+> The GGUF remains file-backed on NVMe and Linux faults model pages into memory on demand. This repository demonstrates execution under a severe model-size-to-RAM mismatch; it does not claim that 78.62 GiB of weights are resident in physical memory.
+
+## Verified public result
+
+| Metric | Result |
+|---|---:|
+| Model | DeepSeek V4 Flash |
+| GGUF size | **78.62 GiB** |
+| Logical parameters | **284.33B** |
+| Physical RAM | **7.7 GiB** |
+| Backend | **CPU only** |
+| GPU / CUDA | **None** |
+| Controlled cold first-token diagnostic | **5.33 s** |
+| Maximum RSS | **6,204,632 KiB** |
+| Process swaps | **0** |
+| Storage path | **mmap-backed NVMe demand paging** |
+
+## What this fork adds
+
+1. **DeepSeek V4 Flash AProjQ4 CPU support** for GGUFs whose dense attention projections are stored as `Q4_K`.
+2. **Opt-in CPU demand paging** for systems where the GGUF is much larger than physical RAM:
+
+```bash
+export DS4_CPU_NO_PREFETCH=1
+```
+
+## What this demonstrates
+
+- CPU-only execution of the tested DeepSeek V4 Flash GGUF under extreme memory pressure.
+- A model file much larger than installed physical RAM can execute through file-backed demand paging.
+- The controlled public first-token diagnostic completed without process swap.
+- The repository includes methodology, benchmark data, evidence tracking, and explicit claim boundaries.
+
+## What this does not claim
+
+- That the complete 78.62 GiB model fits inside 7.7 GiB RAM.
+- Production-grade inference speed.
+- Competitive sustained generation throughput.
+- That the 5.33-second diagnostic equals normal chat latency.
+- That Linux VM tuning results generalize to other machines or storage devices.
+- Universal support for every DeepSeek GGUF or quantization.
+
+## Research status
 
 **v0.1 Research Preview**
 
-The current public candidate adds two focused capabilities:
+The public v0.1 claim is intentionally narrow: CPU-only execution of an AProjQ4 DeepSeek V4 Flash GGUF on a memory-constrained Linux system using NVMe-backed demand paging.
 
-- CPU support for DeepSeek V4 Flash **AProjQ4** GGUFs, where the dense
-  attention projections are stored as Q4_K.
-- An opt-in CPU demand-paging mode using `DS4_CPU_NO_PREFETCH=1` for
-  systems where the GGUF is much larger than physical RAM.
+Current follow-up work focuses on sustained decode behavior, page faults and refaults, Linux VM pressure, swap policy, and expert-weight I/O.
 
-The release candidate has been functionally validated with a
-**78.62 GiB DeepSeek V4 Flash GGUF**, reporting **284.33B logical
-parameters**, on a CPU-only Linux laptop with approximately **7.7 GiB
-of physical RAM**.
+## Evidence and reproducibility
 
-This is a research preview, not a claim that the model fits entirely
-in RAM and not a production-performance guarantee. Model weights are
-not distributed with this repository.
+- [`docs/evidence-register.md`](docs/evidence-register.md) — measurements, evidence classifications, hashes, and claim boundaries.
+- [`MODEL_CARD.md`](MODEL_CARD.md) — model and test scope.
+- [`benchmarks/`](benchmarks/) — benchmark data.
+- [`QA_BEFORE_RELEASES.md`](QA_BEFORE_RELEASES.md) — release and upstream QA context.
+
+## Quick start
+
+Build the CPU target:
+
+```bash
+make cpu
+```
+
+Enable the memory-constrained demand-paging path:
+
+```bash
+export DS4_CPU_NO_PREFETCH=1
+```
+
+Then use a supported DeepSeek V4 Flash GGUF with the normal DwarfStar CLI workflow documented below.
+
+## Project lineage
+
+This is a research fork of [`antirez/ds4`](https://github.com/antirez/ds4).
+
+The upstream project, architecture, inference engine, and original documentation remain credited and preserved below.
 
 Research, integration, benchmarking, and release work: **Mutaz Abubaker**.
 
