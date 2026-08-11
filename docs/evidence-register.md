@@ -35,6 +35,7 @@ This register separates verified public-release evidence from historical researc
 | E-018 | V16.7 swappiness 182 vs 185 with full swap reset | INCONCLUSIVE | Historical follow-up |
 | E-019 | V16.8R qualified swappiness 185 vs 187 rerun | INCONCLUSIVE | Historical follow-up |
 | E-020 | V16.9 qualified swappiness 187 vs 188 direct comparison | INCONCLUSIVE | Historical follow-up |
+| E-021 | V17.4F early hash Gate/Up prefetch controlled A/B | INCONCLUSIVE | Generation-throughput optimization follow-up |
 
 ## E-010 — Linux VM Swappiness 10 vs 100
 
@@ -1926,3 +1927,189 @@ The local raw summary remains outside the public repository.
 E-020 applies only to the tested hardware, kernel, memory and swap layout, model artifact, ds4 workload, and experimental procedure.
 
 It does not establish a universal Linux swappiness recommendation.
+
+## E-021 — V17.4F Early Hash Gate/Up Prefetch Controlled A/B
+
+### Classification
+
+`INCONCLUSIVE`
+
+No statistically established sustained-decode latency improvement was demonstrated.
+
+### Research Question
+
+V17.4F tested whether issuing selected routed Gate/Up `WILLNEED` hints earlier for the first three hash-routed layers could overlap NVMe-backed page-in with attention work and reduce sustained decode latency.
+
+The experiment was deliberately narrow.
+
+It did not change model arithmetic, expert weights, router probabilities, expert execution order, or generated output.
+
+### Experimental Variant
+
+Control A:
+
+`DS4_CPU_V17_HASH_EARLY_GU` unset.
+
+Variant B:
+
+`DS4_CPU_V17_HASH_EARLY_GU=1`
+
+Both conditions used the same locally built experimental binary.
+
+The V17.4 experimental source change itself is not promoted into the public source tree by this evidence entry.
+
+### Tested Workload
+
+- Backend: CPU only
+- Threads: 6
+- Context: 64
+- Generated tokens requested: 40
+- Prompt: `a`
+- Temperature: 0
+- Model loading mode: mmap-backed demand paging
+- `DS4_CPU_NO_PREFETCH=1`
+- Sustained metric: 38 decode samples after excluding the first decode
+- Expected decode evaluations per accepted run: 39
+- Working run swappiness: 187
+- Cooldown swappiness: 10
+
+Model artifact:
+
+`DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ4-SExpQ8-OutQ8-chat-v2-imatrix-0731.gguf`
+
+Generated-output SHA256 for every accepted run:
+
+`ae87ce0600b11a7ce25c79d6ab9c3bf6ee58c70840afc710de0d79a6e2d474b5`
+
+### Run Qualification
+
+The final experiment used eight counterbalanced pairs for sixteen measured runs.
+
+Pair ordering:
+
+`AB / BA / AB / BA / BA / AB / BA / AB`
+
+Before each run, swap state was reset, filesystem caches were dropped, and the system was allowed to settle.
+
+The start gate required:
+
+- CPU package temperature no greater than 49 C
+- one-minute load average no greater than 0.10
+- pre-run swap no greater than 32 MiB
+
+After the start gate passed, swappiness was changed from 10 to 187 immediately before the model run.
+
+All sixteen measured runs completed successfully.
+
+Output parity passed in all sixteen runs.
+
+Every accepted run produced 39 decode evaluations.
+
+### Sustained Decode
+
+| Pair | Control A | Variant B | B vs A |
+| ---- | --------: | --------: | -----: |
+| 1 | 3215.624 ms | 3210.258 ms | -0.17% |
+| 2 | 3208.799 ms | 3245.870 ms | +1.16% |
+| 3 | 3200.185 ms | 3202.199 ms | +0.06% |
+| 4 | 3177.303 ms | 3197.492 ms | +0.64% |
+| 5 | 3228.070 ms | 3204.115 ms | -0.74% |
+| 6 | 3229.213 ms | 3229.161 ms | -0.00% |
+| 7 | 3327.477 ms | 3214.431 ms | -3.40% |
+| 8 | 3224.663 ms | 3220.268 ms | -0.14% |
+| Mean | 3226.417 ms | 3215.474 ms | -0.34% |
+
+Variant B won:
+
+`5/8 pairs`
+
+Paired mean latency difference, B minus A:
+
+`-10.942 ms`
+
+Paired 95% confidence interval:
+
+`[-48.641, +26.756] ms`
+
+The confidence interval crosses zero.
+
+Therefore the nominal 0.34% lower mean latency for B is not sufficient to establish a real performance improvement.
+
+Pair 7 contributes a comparatively large favorable B-minus-A difference of `-113.046 ms`, so the small pooled advantage should not be interpreted as robust evidence of a speedup.
+
+### Position Balance
+
+Mean position-1 latency:
+
+`3216.449 ms`
+
+Mean position-2 latency:
+
+`3225.442 ms`
+
+Position 2 versus Position 1:
+
+`+0.28%`
+
+This is substantially smaller than the earlier sequence drift observed during development of the benchmark procedure and indicates that the final counterbalanced protocol controlled run-position effects reasonably well.
+
+### Start-State Balance
+
+Mean Control A start state:
+
+- temperature: `47.50 C`
+- load: `0.080`
+- swap: `0.0 kB`
+
+Mean Variant B start state:
+
+- temperature: `48.00 C`
+- load: `0.075`
+- swap: `160.0 kB`
+
+The accepted start states were closely balanced between conditions.
+
+### I/O Diagnostics
+
+Pooled Variant B versus Control A:
+
+- filesystem input activity: `-1.07%`
+- major page faults: `-2.05%`
+
+These secondary metrics moved in the direction expected from earlier page-in hints.
+
+They are diagnostic evidence only.
+
+A reduction in these counters without a statistically established latency reduction does not establish a throughput optimization.
+
+### Interpretation
+
+The experiment preserves output correctness and shows that the early hash Gate/Up hint path can execute without altering generated output.
+
+However, the final controlled A/B experiment did not establish a sustained-decode speedup.
+
+The first three hash-routed layers represent only a limited portion of routed expert I/O, so further complexity devoted only to this early hash path is not justified by the measured result.
+
+V17.4 is therefore closed as `INCONCLUSIVE`.
+
+### Next Research Phase
+
+The next generation-throughput phase should focus on the later activation-dependent top-k routed layers.
+
+The immediate research question is when the six selected expert IDs become known relative to their first Gate/Up weight access, and whether a useful overlap window exists without changing model arithmetic or output correctness.
+
+### Sanitized Numeric Source
+
+`benchmarks/v17.4f-hash-early-gu-ab.csv`
+
+SHA256:
+
+`779b98b9930b80e1e802ff064eb4e9e6d818883eb5510a63c2d9427c98350e1b`
+
+### Claim Boundary
+
+E-021 applies only to the tested hardware, kernel, CPU/NVMe memory-constrained execution model, model artifact, workload, experimental binary, and final counterbalanced procedure.
+
+It does not establish that early expert prefetch is universally ineffective.
+
+It establishes only that this specific V17.4 early hash Gate/Up mechanism did not demonstrate a statistically established sustained-decode improvement under the tested conditions.

@@ -127,3 +127,34 @@ See `docs/evidence-register.md` entries E-010, E-013, E-014, E-015, E-016, E-017
 V16.9 directly compared swappiness 187 versus 188 using six balanced pairs and the qualified pre-run swap gate. All twelve accepted runs passed on attempt 1. Swappiness 188 was slower in five of six sustained-decode pairs, with a pooled mean regression of 1.19%, but the paired 95% confidence interval crossed zero. VM measurements also showed a small unfavorable tendency at 188, including higher file refaults, kswapd steal, and memory PSI. The result is classified as `INCONCLUSIVE` with a consistent mild unfavorable trend at 188.
 
 With V16.9, fine-grained swappiness tuning is considered complete for this workload. The controlled evidence supports an effectively flat sustained-decode region from approximately 175 through 187, a mild unfavorable tendency at 188, and a strong demonstrated sustained regression at 200. Swappiness 187 is retained as a conservative working setting for subsequent experiments, not as a universal optimum.
+
+### V17.4F — Early Hash Gate/Up Prefetch
+
+V17 moved the research focus from Linux VM micro-tuning to sustained generation throughput.
+
+V17.4F evaluated an opt-in early Gate/Up page-in hint for the first three hash-routed layers. The mechanism used token-known expert IDs to issue selected `WILLNEED` hints before attention, while preserving model arithmetic and generated output.
+
+The final experiment used eight counterbalanced A/B pairs for sixteen valid runs. All runs passed output parity and produced 39 decode evaluations.
+
+Mean sustained-decode latency was:
+
+- Control A: `3226.417 ms/token`
+- Variant B: `3215.474 ms/token`
+- Nominal B vs A change: `-0.34%`
+
+Variant B won `5/8` pairs. The paired mean difference was `-10.942 ms`, with a 95% confidence interval of `[-48.641, +26.756] ms`.
+
+Because the confidence interval crosses zero, the result is classified as `INCONCLUSIVE`: no statistically established sustained-decode speedup was demonstrated.
+
+Secondary diagnostics moved modestly in the expected direction:
+
+- filesystem input activity: `-1.07%`
+- major page faults: `-2.05%`
+
+These are diagnostic signals only and do not establish a throughput improvement without a corresponding statistically supported latency reduction.
+
+Run-position balance in the final protocol was good: position 2 was only `+0.28%` slower than position 1.
+
+V17.4 is therefore closed without promoting the experimental hash-only mechanism as a performance optimization. The next research phase targets the later activation-dependent top-k routed layers, which represent the substantially larger remaining routed-expert workload.
+
+See `docs/evidence-register.md` entry E-021 and `benchmarks/v17.4f-hash-early-gu-ab.csv` for the evidence and sanitized numeric data.
