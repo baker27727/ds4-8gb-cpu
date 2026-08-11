@@ -34,6 +34,7 @@ This register separates verified public-release evidence from historical researc
 | E-017 | V16.6 swappiness 175 vs 182 with full swap reset | INCONCLUSIVE | Historical follow-up |
 | E-018 | V16.7 swappiness 182 vs 185 with full swap reset | INCONCLUSIVE | Historical follow-up |
 | E-019 | V16.8R qualified swappiness 185 vs 187 rerun | INCONCLUSIVE | Historical follow-up |
+| E-020 | V16.9 qualified swappiness 187 vs 188 direct comparison | INCONCLUSIVE | Historical follow-up |
 
 ## E-010 — Linux VM Swappiness 10 vs 100
 
@@ -1746,3 +1747,182 @@ The local research summary remains outside the public repository.
 E-019 is historical system-tuning evidence.
 
 It does not establish an optimal Linux swappiness value or a universal degradation threshold for other systems, kernels, storage devices, memory capacities, swap configurations, models, or workloads.
+
+## E-020 — V16.9 Qualified Swappiness 187 vs 188
+
+### Classification
+
+- Status: `INCONCLUSIVE`
+- Primary metric: sustained decode
+- Interpretation: consistent mild unfavorable trend at swappiness 188
+- Comparison: `vm.swappiness=187` vs `vm.swappiness=188`
+- Controlled balanced pairs: 6
+- Accepted runs: 12
+- All accepted runs passed the pre-run qualification gate on attempt 1
+- Qualified pre-run swap gate: total swap `<= 16 MiB`
+- Sustained measurement window: decode evaluations 2 through 19
+- Output parity: identical across all accepted runs
+- Backend: CPU only
+- Public-release relationship: historical system-tuning evidence; not a universal Linux tuning recommendation
+
+### Run Qualification
+
+All twelve accepted runs completed successfully.
+
+Every run passed the pre-run swap gate on its first attempt.
+
+Observed accepted pre-run swap levels were between 0 and approximately 1.25 MiB, well below the 16 MiB threshold.
+
+This removes the baseline ambiguity observed in the original V16.8 experiment.
+
+### Sustained Decode
+
+| Pair | Swappiness 187 | Swappiness 188 | Change |
+| --- | ---: | ---: | ---: |
+| 1 | 3123.345 ms | 3258.235 ms | +4.32% |
+| 2 | 3423.251 ms | 3303.920 ms | -3.49% |
+| 3 | 3449.094 ms | 3564.729 ms | +3.35% |
+| 4 | 3546.656 ms | 3624.394 ms | +2.19% |
+| 5 | 3603.767 ms | 3627.366 ms | +0.65% |
+| 6 | 3629.912 ms | 3644.202 ms | +0.39% |
+| Mean | 3462.671 ms | 3503.808 ms | +1.19% |
+
+Swappiness 187 wins:
+
+`5/6`
+
+Swappiness 188 wins:
+
+`1/6`
+
+Paired mean difference:
+
+`+41.137 ms`
+
+Paired 95% confidence interval:
+
+`[-55.568, +137.842] ms`
+
+Swappiness 188 was slower in five of six pairs.
+
+However, the paired confidence interval crossed zero.
+
+The sustained-decode result is therefore `INCONCLUSIVE`.
+
+### First Decode
+
+| Pair | Swappiness 187 | Swappiness 188 |
+| --- | ---: | ---: |
+| 1 | 3127.278 ms | 3787.227 ms |
+| 2 | 3882.650 ms | 3295.167 ms |
+| 3 | 3723.439 ms | 4216.997 ms |
+| 4 | 4516.248 ms | 4114.702 ms |
+| 5 | 3696.361 ms | 4221.243 ms |
+| 6 | 3824.869 ms | 3973.600 ms |
+| Mean | 3795.141 ms | 3934.823 ms |
+
+Mean difference:
+
+`+139.682 ms`
+
+Relative difference:
+
+`+3.68%`
+
+Swappiness 187 wins:
+
+`4/6`
+
+Swappiness 188 wins:
+
+`2/6`
+
+Paired 95% confidence interval:
+
+`[-408.856, +688.219] ms`
+
+The first-decode result is inconclusive.
+
+### VM / Memory Pressure
+
+Mean changes for swappiness 188 relative to 187:
+
+| Metric | Change |
+| --- | ---: |
+| Major faults | +0.22% |
+| File refaults | +3.42% |
+| kswapd scan | -0.13% |
+| kswapd steal | +2.53% |
+| Direct scan | -2.35% |
+| Direct steal | -3.81% |
+| Swap-in | +0.40% |
+| Swap-out | +0.39% |
+| Memory PSI some | +2.77% |
+| Memory PSI full | +2.74% |
+| ZRAM growth | +0.16% |
+
+Mean PSI values:
+
+- swappiness 187: some `10.489 s`, full `10.389 s`
+- swappiness 188: some `10.780 s`, full `10.674 s`
+
+Mean ZRAM growth:
+
+- swappiness 187: `697.36 MiB`
+- swappiness 188: `698.48 MiB`
+
+The VM evidence is consistent with a small increase in pressure at 188, particularly in file refaults, kswapd steal, and memory PSI.
+
+Swap traffic and ZRAM growth remained nearly unchanged.
+
+### Interpretation
+
+The direct qualified comparison does not establish a sharp performance cliff between swappiness 187 and 188.
+
+Nevertheless, several independent observations point mildly in the same direction:
+
+- 187 won five of six sustained-decode pairs
+- the pooled sustained mean was 1.19% faster at 187
+- file refaults were higher at 188
+- kswapd steal was higher at 188
+- memory PSI was approximately 2.7% higher at 188
+
+Because the paired confidence interval crossed zero, these observations are classified as a consistent mild unfavorable trend rather than a statistically established threshold.
+
+### V16 Swappiness Conclusion
+
+Taken together, the controlled fine-tuning evidence indicates that approximately swappiness 175 through 187 behaves as an effectively flat sustained-decode region for this tested system and workload.
+
+Swappiness 188 shows a small unfavorable tendency but not a demonstrated discontinuity.
+
+Swappiness 200 remains the clearly demonstrated strong sustained-decode regression point.
+
+Swappiness 187 is therefore retained as a conservative working setting for subsequent research on this machine.
+
+It is not presented as a universal optimum.
+
+Further sub-point swappiness tuning is not justified by the measured effect sizes and run-to-run variability.
+
+The V16 swappiness investigation is considered complete.
+
+### Next Research Phase
+
+The next optimization phase returns to production-relevant generation throughput.
+
+The primary target changes from Linux VM micro-tuning to improving generated tokens per second while preserving output correctness and the memory-constrained CPU/NVMe operating model.
+
+### Sanitized Numeric Source
+
+`benchmarks/v16.9-swappiness-187-vs-188.csv`
+
+### Local Evidence Hash
+
+The local raw summary remains outside the public repository.
+
+`be49dc982836d4ff0ab94fadbbcfb634c603aeb93d5de5764ac4f778063b3e3d`
+
+### Claim Boundary
+
+E-020 applies only to the tested hardware, kernel, memory and swap layout, model artifact, ds4 workload, and experimental procedure.
+
+It does not establish a universal Linux swappiness recommendation.

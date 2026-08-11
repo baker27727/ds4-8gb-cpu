@@ -122,4 +122,8 @@ Taken together, the historical evidence shows an effectively neutral sustained-d
 
 These experiments reset zram and dropped filesystem caches, but V16.2 and V16.3 did not fully clear the disk-backed swapfile between every run. They remain historical research evidence and are not promoted into the current v0.1 public performance claim.
 
-See `docs/evidence-register.md` entries E-010, E-013, E-014, E-015, E-016, E-017, E-018, and E-019 for classification and claim boundaries.
+See `docs/evidence-register.md` entries E-010, E-013, E-014, E-015, E-016, E-017, E-018, E-019, and E-020 for classification and claim boundaries.
+
+V16.9 directly compared swappiness 187 versus 188 using six balanced pairs and the qualified pre-run swap gate. All twelve accepted runs passed on attempt 1. Swappiness 188 was slower in five of six sustained-decode pairs, with a pooled mean regression of 1.19%, but the paired 95% confidence interval crossed zero. VM measurements also showed a small unfavorable tendency at 188, including higher file refaults, kswapd steal, and memory PSI. The result is classified as `INCONCLUSIVE` with a consistent mild unfavorable trend at 188.
+
+With V16.9, fine-grained swappiness tuning is considered complete for this workload. The controlled evidence supports an effectively flat sustained-decode region from approximately 175 through 187, a mild unfavorable tendency at 188, and a strong demonstrated sustained regression at 200. Swappiness 187 is retained as a conservative working setting for subsequent experiments, not as a universal optimum.
