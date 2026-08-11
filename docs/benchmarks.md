@@ -100,6 +100,16 @@ The purpose of the v0.1 benchmark record is to document a reproducible functiona
 
 ## Later VM Research
 
-Separate research on Linux reclaim, zram, and higher `vm.swappiness` values produced promising results on an earlier research branch.
+Historical follow-up experiments investigated Linux reclaim, zram, and `vm.swappiness` under the memory-constrained CPU/NVMe workload.
 
-Those results are intentionally not promoted into the v0.1 current-upstream benchmark claim. They should be rerun on the public candidate before being treated as release evidence.
+The balanced V16.1 comparison of swappiness 10 versus 100 produced a strong historical signal: pooled steady decode improved by 9.11% with 4/4 paired wins.
+
+V16.2 compared swappiness 100 versus 150. The mean direction favored 150 by 1.60%, with 3/4 paired wins, but the paired 95% confidence interval crossed zero. That result is classified as `INCONCLUSIVE`.
+
+V16.3 compared swappiness 100 versus 200. Swappiness 200 regressed sustained decode by 71.60% on average and lost all four balanced pairs. The paired confidence interval excluded zero. That result is classified as `STRONG-HISTORICAL`, with swappiness 200 rejected for the tested system and workload.
+
+Taken together, the historical evidence places the useful research region approximately between swappiness 100 and 150 rather than near 200.
+
+These experiments reset zram and dropped filesystem caches, but V16.2 and V16.3 did not fully clear the disk-backed swapfile between every run. They remain historical research evidence and are not promoted into the current v0.1 public performance claim.
+
+See `docs/evidence-register.md` entries E-010, E-013, and E-014 for classification and claim boundaries.

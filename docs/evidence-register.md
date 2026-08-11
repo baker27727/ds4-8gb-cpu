@@ -27,6 +27,8 @@ This register separates verified public-release evidence from historical researc
 | E-010 | V16.1 swappiness 10 vs 100 | STRONG-HISTORICAL | Follow-up candidate |
 | E-011 | V4 latest-upstream reproduction | INCONCLUSIVE | Rejected for v0.1 |
 | E-012 | Public v0.1 controlled cold first-token validation | VERIFIED-PUBLIC | Core v0.1 |
+| E-013 | V16.2 swappiness 100 vs 150 | INCONCLUSIVE | Historical follow-up |
+| E-014 | V16.3 swappiness 100 vs 200 | STRONG-HISTORICAL | Historical follow-up |
 
 ## E-010 — Linux VM Swappiness 10 vs 100
 
@@ -919,3 +921,156 @@ The raw controlled-run files remain outside the public repository because they c
 ### Claim Boundary
 
 The 5.33-second result is a controlled cold first-token diagnostic, not a production generation-speed benchmark. E-012 supports CPU-only functional execution under severe RAM-to-model-size mismatch and validates the public demand-paging path; it does not establish sustained generation throughput or universal performance on other storage, kernels, or hardware.
+
+## E-013 — V16.2 Swappiness 100 vs 150
+
+### Classification
+
+- Status: `INCONCLUSIVE`
+- Scope: historical Linux VM follow-up experiment
+- Backend: CPU only
+- Comparison: `vm.swappiness=100` vs `vm.swappiness=150`
+- Balanced paired runs: 4
+- Sustained measurement window: decode evaluations 2 through 19
+- Output parity: identical across all eight runs
+- Public-release relationship: follow-up historical evidence; not a current v0.1 performance claim
+
+### Result
+
+| Metric | Swappiness 100 | Swappiness 150 | Change |
+| --- | ---: | ---: | ---: |
+| Mean steady decode | 3351.506 ms | 3297.958 ms | -1.60% |
+| Pair wins | 1/4 | 3/4 | — |
+| Major faults | 23,767.72 | 22,433.46 | -5.61% |
+| Filesystem input | 5,189,073.67 | 4,822,966.44 | -7.06% |
+| File refaults | 507,423.83 | 460,170.10 | -9.31% |
+| kswapd scan | 1,687,742.67 | 1,623,640.28 | -3.80% |
+| kswapd steal | 660,960.03 | 617,370.94 | -6.59% |
+| Swap-in | 6,218.28 | 8,449.49 | +35.88% |
+| Swap-out | 10,063.54 | 12,696.74 | +26.17% |
+| ZRAM growth | 658.42 MiB | 682.23 MiB | +3.62% |
+| Memory PSI some | 12.030 s | 10.968 s | -8.83% |
+| Memory PSI full | 11.942 s | 10.869 s | -8.99% |
+
+Paired steady-decode mean difference:
+
+`-53.548 ms`
+
+Relative change:
+
+`-1.60%`
+
+B150 wins:
+
+`3/4`
+
+Paired 95% confidence interval:
+
+`[-196.995, +89.898] ms`
+
+The confidence interval crosses zero, so this experiment does not establish a reliable sustained-decode advantage for swappiness 150 over 100.
+
+### Interpretation
+
+The direction was favorable to swappiness 150 and was accompanied by fewer major faults, less filesystem input, fewer file refaults, and lower memory PSI.
+
+However, swap activity increased and the paired confidence interval crossed zero. The result is therefore classified as inconclusive rather than as a performance improvement.
+
+Combined with E-010, the result is consistent with diminishing returns after the large improvement observed between swappiness 10 and 100.
+
+### Methodology Boundary
+
+The V16.2 reset procedure reset zram and dropped filesystem caches before each run, but did not fully clear the disk-backed swapfile between runs.
+
+This limits the experiment to historical research evidence. It should not be interpreted as a universal Linux tuning recommendation.
+
+Sanitized numeric source:
+
+`benchmarks/v16.2-swappiness-100-vs-150.csv`
+
+## E-014 — V16.3 Swappiness 100 vs 200
+
+### Classification
+
+- Status: `STRONG-HISTORICAL`
+- Scope: historical Linux VM follow-up experiment
+- Backend: CPU only
+- Comparison: `vm.swappiness=100` vs `vm.swappiness=200`
+- Balanced paired runs: 4
+- Sustained measurement window: decode evaluations 2 through 19
+- Output parity: identical across all eight runs
+- Public-release relationship: historical evidence only; not a current v0.1 performance claim
+
+### Result
+
+| Pair | Swappiness 100 | Swappiness 200 | Change |
+| --- | ---: | ---: | ---: |
+| 1 | 3506.335 ms | 5888.745 ms | +67.95% |
+| 2 | 3346.007 ms | 5574.943 ms | +66.61% |
+| 3 | 3282.993 ms | 5735.438 ms | +74.70% |
+| 4 | 3314.906 ms | 5881.953 ms | +77.44% |
+| Mean | 3362.560 ms | 5770.270 ms | +71.60% |
+
+A100 wins:
+
+`4/4`
+
+B200 wins:
+
+`0/4`
+
+Paired mean difference:
+
+`+2407.710 ms`
+
+Paired 95% confidence interval:
+
+`[+2182.696, +2632.723] ms`
+
+The confidence interval excludes zero and every balanced pair regressed at swappiness 200.
+
+### First-Decode Observation
+
+Mean first decode:
+
+- swappiness 100: `3975.231 ms`
+- swappiness 200: `3128.571 ms`
+- apparent change: approximately `-21.30%`
+- B200 wins: `4/4`
+- paired 95% confidence interval: `[-2113.612, +420.293] ms`
+
+The first-decode confidence interval crosses zero. This apparent advantage is therefore not treated as a reliable performance result.
+
+More importantly, it does not compensate for the large sustained-decode regression.
+
+### Interpretation
+
+Swappiness 200 was decisively harmful to sustained decode on the tested machine and workload.
+
+The regression was large, consistent across all four balanced pairs, and statistically separated from zero in the paired analysis.
+
+Memory pressure also became very high during the B200 runs, consistent with excessive reclaim and swap activity under this workload.
+
+E-014 therefore rejects swappiness 200 as a useful setting for this tested configuration.
+
+Combined V16 evidence now shows:
+
+- swappiness 10 to 100: strong historical improvement
+- swappiness 100 to 150: small favorable but inconclusive trend
+- swappiness 100 to 200: strong sustained-decode regression
+
+The current candidate region for further research is therefore approximately swappiness 100 to 150 on this tested system and workload.
+
+### Methodology Boundary
+
+As in V16.2, zram was reset and filesystem caches were dropped, but the disk-backed swapfile was not fully reset between runs.
+
+That limitation does not erase the large and consistent V16.3 regression, but future VM experiments use a stricter full swap-tier reset before drawing finer-grained tuning conclusions.
+
+Sanitized numeric source:
+
+`benchmarks/v16.3-swappiness-100-vs-200.csv`
+
+### Claim Boundary
+
+E-014 is historical system-tuning evidence. It does not establish an optimal Linux swappiness value for other machines, kernels, storage devices, memory sizes, model formats, or workloads.
