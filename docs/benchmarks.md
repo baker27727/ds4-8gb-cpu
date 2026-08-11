@@ -114,8 +114,10 @@ V16.5 narrowed the upper region by comparing swappiness 175 versus 188 using the
 
 V16.6 compared swappiness 175 versus 182 under the same strengthened reset methodology. Mean steady-decode latency differed by only 0.49%, with each setting winning two of four balanced pairs and a wide paired confidence interval crossing zero. The result is classified as `INCONCLUSIVE` and effectively neutral. Together with V16.5, the current degradation-onset bracket is narrowed approximately to swappiness 182 through 188 for the tested workload.
 
-Taken together, the historical evidence shows an effectively neutral region from approximately swappiness 175 through 182, an unfavorable but inconclusive trend at 188, and a strong regression at 200. The current degradation-onset bracket is approximately 182 to 188 for the tested workload, while the exact optimum remains unresolved.
+V16.7 compared swappiness 182 versus 185 with a fully clean pre-run swap baseline in all eight runs. Sustained decode remained effectively neutral: swappiness 185 was 0.92% slower on the mean, with a 2/4 versus 2/4 pair split and a wide confidence interval crossing zero. First decode showed a separate strong unfavorable signal at 185, with 182 winning all four pairs and the paired confidence interval excluding zero. The primary sustained-decode classification remains `INCONCLUSIVE`. The current sustained-degradation onset bracket is narrowed approximately to swappiness 185 through 188.
+
+Taken together, the historical evidence shows an effectively neutral sustained-decode region from approximately swappiness 175 through 185, an unfavorable but inconclusive sustained trend at 188, and a strong regression at 200. The current sustained-degradation onset bracket is approximately 185 to 188 for the tested workload, while the exact optimum remains unresolved.
 
 These experiments reset zram and dropped filesystem caches, but V16.2 and V16.3 did not fully clear the disk-backed swapfile between every run. They remain historical research evidence and are not promoted into the current v0.1 public performance claim.
 
-See `docs/evidence-register.md` entries E-010, E-013, E-014, E-015, E-016, and E-017 for classification and claim boundaries.
+See `docs/evidence-register.md` entries E-010, E-013, E-014, E-015, E-016, E-017, and E-018 for classification and claim boundaries.
