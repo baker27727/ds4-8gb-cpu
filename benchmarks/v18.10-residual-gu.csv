@@ -1,0 +1,5 @@
+experiment,comparison,arm,mean_s,median_s,sd_s,wins_candidate,total_pairs,paired_delta_candidate_minus_baseline_s,ci95_low_s,ci95_high_s,major_faults,fs_inputs,rss_kib,output_sha256,decision
+V18.10D2,two_batch_vs_granular,C_granular_direct,50.370,50.315,1.060,,,0.000,,,62867,82457482,7115074,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,retained_baseline
+V18.10D2,two_batch_vs_granular,D_two_batch,55.502,55.565,0.241,0,4,5.132,3.507,6.758,100546,91574526,7141411,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,rejected_regression
+V18.10E2,microbatch2_vs_granular,C_granular_direct,51.492,51.460,2.111,,,0.000,,,61665,82225150,7087001,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,retained_baseline
+V18.10E2,microbatch2_vs_granular,E2_microbatch2,53.380,53.255,1.268,0,4,1.888,-0.816,4.591,67801,83581328,7136488,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,rejected_inconclusive_unfavorable

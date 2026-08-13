@@ -94,3 +94,60 @@ The performance result itself was inconclusive, so that optimization was removed
 A favorable single run is not promoted to a release performance claim. Repeated and balanced comparisons are preferred, and experiments that do not reproduce consistently are documented as inconclusive.
 
 The principal v0.1 claim is functional: a 78.62 GiB DeepSeek V4 Flash AProjQ4 GGUF completed a native whole-model CPU first-token diagnostic on the tested system with approximately 7.7 GiB of physical RAM.
+
+
+## V18 Throughput Follow-Up Methodology
+
+Later V18 research evaluates activation-dependent routed-expert I/O and
+CPU runtime scheduling separately from the original v0.1 first-token
+functional claim.
+
+The V18 comparison policy is:
+
+1. compare candidates using paired, balanced, or rotated run order where
+   the experiment supports it;
+2. preserve the same model and workload within each comparison;
+3. require output parity before interpreting performance;
+4. treat elapsed-time differences as the primary performance signal;
+5. report paired win count, paired mean difference, and 95% confidence
+   interval when available;
+6. treat page faults, filesystem input, device-read volume, RSS, CPU
+   time, and thermal counters as diagnostic signals rather than direct
+   throughput claims;
+7. do not promote a favorable mean when the paired confidence interval
+   crosses zero;
+8. retain simpler/lower-speculation behavior when candidate performance
+   is statistically tied and the more aggressive variant adds I/O.
+
+The repeated short-run V18.10/V18.12 comparisons produced the output
+SHA-256:
+
+`b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f`
+
+The sustained V18.12 comparisons used:
+
+`f38d5456e87b8000941cbb1f6e5090d0da47a1548515e9b42885bbf67e6d2646`
+
+### Thermal Qualification
+
+Sustained laptop measurements are especially sensitive to CPU
+temperature, frequency limits, and hardware throttling.
+
+The V18.12E2 repetition reduced run-to-run variability sufficiently to
+produce a paired T8 advantage whose confidence interval excluded zero,
+but the host still exhibited material thermal throttling and T8 carried
+higher measured thermal/throttle counters.
+
+Accordingly, the evidence is described as paired sustained evidence
+under a thermally constrained host. It is not described as a strict
+constant-temperature benchmark, and it is not generalized to other CPU
+topologies or cooling systems.
+
+### Public-Evidence Boundary
+
+Until the protected V18 source candidate is separately promoted, built,
+and parity-tested from the clean publication branch, E-022 through E-025
+remain research-branch evidence.
+
+Evidence publication and source promotion are intentionally separate
+steps.

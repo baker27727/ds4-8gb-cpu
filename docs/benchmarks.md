@@ -158,3 +158,83 @@ Run-position balance in the final protocol was good: position 2 was only `+0.28%
 V17.4 is therefore closed without promoting the experimental hash-only mechanism as a performance optimization. The next research phase targets the later activation-dependent top-k routed layers, which represent the substantially larger remaining routed-expert workload.
 
 See `docs/evidence-register.md` entry E-021 and `benchmarks/v17.4f-hash-early-gu-ab.csv` for the evidence and sanitized numeric data.
+
+
+## V18 Runtime Winner Selection
+
+V18 moved from hash-only early prefetch to activation-dependent routed
+expert scheduling and then closed the main runtime-selection axes for the
+tested CPU/NVMe host.
+
+The retained research configuration is:
+
+- early activation-dependent AIO Top-K: `2`
+- residual Gate/Up: granular/direct consumption
+- Down AIO budget: `6`
+- CPU worker threads: `8`
+
+These are historical research-branch results pending reproduction on the
+public source candidate. They are not promoted here as universal or
+current-public-branch performance claims.
+
+### Top-K Selection
+
+K1 was slower than K2 in all four paired comparisons, with a paired
+K1-minus-K2 95% confidence interval of `[+0.544, +2.766] s`.
+
+K3 and layer-masked K3 produced small favorable mean directions relative
+to K2, but both paired confidence intervals crossed zero. K2 was retained
+because neither K3 variant demonstrated a latency advantage sufficient
+to justify additional speculative I/O.
+
+See E-022 and `benchmarks/v18.10-topk-selection.csv`.
+
+### Residual Gate/Up Alternatives
+
+The no-allocation two-batch alternative was approximately `10.19%`
+slower than the retained granular/direct baseline and lost all four
+pairs. Its paired 95% confidence interval was
+`[+3.507, +6.758] s`.
+
+Micro-batch=2 also lost all four observed pairs, but its confidence
+interval crossed zero, so that result remains inconclusive rather than a
+statistically established regression.
+
+See E-023 and `benchmarks/v18.10-residual-gu.csv`.
+
+### Down AIO Budget
+
+Mean elapsed time was:
+
+- D4: `53.060 s`
+- D5: `52.403 s`
+- D6: `51.663 s`
+
+D6 beat both smaller budgets in all six paired comparisons, and both
+paired confidence intervals excluded zero. Down AIO budget 6 was
+therefore retained.
+
+See E-024 and `benchmarks/v18.11c-down-aio-budget.csv`.
+
+### CPU Thread Count
+
+The initial thread sweep strongly favored T8 over the former T6
+baseline. A focused T8-versus-T4 confirmation then produced a
+`1.573%` mean reduction with `9/10` paired wins and a 95% confidence
+interval of `[-1.302, -0.268] s`.
+
+The first sustained campaign was unresolved. A subsequent qualified
+sustained repetition produced:
+
+- T4: `132.772 s`
+- T8: `130.357 s`
+- T8 reduction: `1.819%`
+- T8 wins: `6/6`
+- paired 95% confidence interval: `[-3.436, -1.394] s`
+
+The laptop remained thermally constrained and T8 incurred higher measured
+thermal/throttle cost. The result is therefore reported as paired
+sustained evidence under a thermally constrained host, not as a
+constant-temperature benchmark.
+
+See E-025 and `benchmarks/v18.12-thread-selection.csv`.
