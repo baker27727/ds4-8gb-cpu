@@ -1,0 +1,9 @@
+experiment,classification,configuration,metric,value,unit,provenance
+V18.15C2,CONTROLLED,Q2_K AVX2,20-token improvement,13.771,percent,historical protected run
+V18.15C3,CONTROLLED,Q2_K AVX2,60-token sustained improvement,15.584,percent,historical protected run
+V18.15D,CONTROLLED,Q2_K AVX2,6-token parity,PASS,,historical protected run
+V18.15D,CONTROLLED,Q2_K AVX2,20-token parity,PASS,,historical protected run
+V18.15D,CONTROLLED,Q2_K AVX2,60-token parity,PASS,,historical protected run
+V18.15D,CONTROLLED,Q2_K AVX2,YMM instruction/reference occurrences,42,count,historical protected run
+V18.15D,CONTROLLED,Q2_K AVX2,vpmaddubsw occurrences,8,count,historical protected run
+V18.15D,CONTROLLED,Q2_K AVX2,vpmaddwd occurrences,8,count,historical protected run

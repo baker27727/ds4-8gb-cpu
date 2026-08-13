@@ -1725,3 +1725,7 @@ first answer:
 The DwarfStar logo was designed by hand by Salvatore Sanfilippo, made more
 graphical with AI, and manually reworked by Ben Gnomino, whose human touch made
 it rock.
+
+### V18.15 Q2_K AVX2 fast path
+
+Recent CPU runtime work produced a validated Q2_K AVX2 fast path. On the reference i7-8550U system, controlled 20-token and sustained 60-token comparisons improved by 13.771% and 15.584%, respectively, versus the previous protected runtime winner, while the tested 6-, 20-, and 60-token outputs remained byte-identical. Performance is hardware- and workload-specific. IQ2_XXS AVX2 performance validation remains pending.

@@ -2375,3 +2375,43 @@ Sanitized numeric source:
 SHA256:
 
 `d45abfa0402a667cac0d2f52c704f46b2420c7f0aa7ee7736bc00918d66b9d8c`
+# V18.15 Q2_K AVX2 Promotion Evidence
+
+This is a sanitized, auditable summary of the protected V18.15 Q2_K AVX2 promotion. It records historical controlled evidence and does not claim a current-public reproduction.
+
+## Protected provenance
+
+| Artifact | SHA256 |
+|---|---|
+| Protected source | `0ea0cbbaef2b24c869eccff258a56ff1d7fd7523b48924f10ac9541088b051c3` |
+| Protected binary | `06fce85c2555c437b786657a6cf5355a0485ef19c8bf200b2ddd05e6f1b3dfd4` |
+
+## Validated configuration
+
+T8 scheduler-default; Early AIO K2; Down AIO D6; residual Gate/Up granular direct consumption; Q2_K AVX2.
+
+## Historical controlled results
+
+| Validation | Result |
+|---|---|
+| 6-token output parity | PASS |
+| 20-token output parity | PASS |
+| 60-token output parity | PASS |
+| 20-token controlled improvement | +13.771% |
+| 60-token sustained improvement | +15.584% |
+| Balanced comparisons | AVX2 won all validated pairs |
+
+The reference system was an i7-8550U. Performance is hardware- and workload-specific. The sustained campaign was thermally constrained/throttled.
+
+## Code-generation evidence
+
+| Check | Result |
+|---|---:|
+| AVX2 codegen | PASS |
+| YMM instruction/reference occurrences | 42 |
+| vpmaddubsw occurrences | 8 |
+| vpmaddwd occurrences | 8 |
+
+## Scope exclusion
+
+IQ2_XXS AVX2 performance work is not included in this promotion. Its controlled performance validation remains pending. No release or tag is created by this promotion.
