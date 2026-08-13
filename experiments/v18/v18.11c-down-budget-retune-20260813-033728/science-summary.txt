@@ -1,0 +1,39 @@
+
+================================================================================================
+D4
+================================================================================================
+residual ready at arm       : 423/853 (49.590%)
+residual expected pairs     : 853
+residual direct pairs       : 792
+residual fallback_total     : 47
+inferred primer/non-sched   : 14
+scheduled fallback rate     : 5.602%
+Down ready at deadline      : 1032/1032 (100.000%)
+Down pending layers         : 0/258
+Down direct consumed        : 1032/1032 (100.000%)
+
+================================================================================================
+D5
+================================================================================================
+residual ready at arm       : 381/853 (44.666%)
+residual expected pairs     : 853
+residual direct pairs       : 774
+residual fallback_total     : 65
+inferred primer/non-sched   : 14
+scheduled fallback rate     : 7.747%
+Down ready at deadline      : 1286/1290 (99.690%)
+Down pending layers         : 3/258
+Down direct consumed        : 1286/1290 (99.690%)
+
+================================================================================================
+D6
+================================================================================================
+residual ready at arm       : 380/853 (44.549%)
+residual expected pairs     : 853
+residual direct pairs       : 754
+residual fallback_total     : 85
+inferred primer/non-sched   : 14
+scheduled fallback rate     : 10.131%
+Down ready at deadline      : 1535/1548 (99.160%)
+Down pending layers         : 9/258
+Down direct consumed        : 1535/1548 (99.160%)

@@ -1,0 +1,969 @@
+V18.10H ADAPTIVE-K SOURCE EVIDENCE
+sha256=8416c4c128684922fcce1ba3f1e82363c95daa157b42612fd532d75301f0d82e
+
+FUNCTION NOT FOUND: cpu_v18_preattn_shadow_capture
+
+FUNCTION NOT FOUND: cpu_v18_preattn_early_gu_prefetch
+
+FUNCTION NOT FOUND: cpu_v19_aio_observe
+
+FUNCTION NOT FOUND: cpu_v19_aio_submit
+
+FUNCTION NOT FOUND: cpu_v19_prepare_op
+
+FUNCTION NOT FOUND: cpu_v19_aio_release_layer
+
+FUNCTION NOT FOUND: cpu_v20_residual_gu_submit
+
+FUNCTION NOT FOUND: cpu_v20_find_current_spec_gu_slot
+
+========================================================================================
+FAST SHADOW CANDIDATE cpu_v18_shadow_top3_fast
+========================================================================================
+ 17357: static bool cpu_v18_shadow_top3_fast(
+ 17358:         int                       selected[DS4_MAX_EXPERT_USED],
+ 17359:         const ds4_model          *model,
+ 17360:         const ds4_layer_weights  *layer,
+ 17361:         const float              *x) {
+ 17362: 
+ 17363:     if (!selected ||
+ 17364:         !model ||
+ 17365:         !layer ||
+ 17366:         !x ||
+ 17367:         !layer->ffn_gate_inp) {
+ 17368: 
+ 17369:         return false;
+ 17370:     }
+ 17371: 
+ 17372: #if defined(__x86_64__) && defined(__AVX2__) && defined(__F16C__)
+ 17373: 
+ 17374:     const ds4_tensor *router =
+ 17375:         layer->ffn_gate_inp;
+ 17376: 
+ 17377:     /*
+ 17378:      * This experiment is intentionally restricted to
+ 17379:      * DeepSeek V4 Flash's F16 4096 x 256 router.
+ 17380:      */
+ 17381:     if (router->type != DS4_TENSOR_F16 ||
+ 17382:         router->ndim != 2 ||
+ 17383:         router->dim[0] != DS4_N_EMBD ||
+ 17384:         router->dim[1] != DS4_N_EXPERT) {
+ 17385: 
+ 17386:         return false;
+ 17387:     }
+ 17388: 
+ 17389:     float score[DS4_MAX_EXPERT];
+ 17390: 
+ 17391:     cpu_v18_fast_router_ctx ctx = {
+ 17392:         .logits = score,
+ 17393:         .data =
+ 17394:             (const uint16_t *)
+ 17395:                 tensor_data(model, router),
+ 17396:         .x = x,
+ 17397:         .in_dim = router->dim[0],
+ 17398:     };
+ 17399: 
+ 17400:     /*
+ 17401:      * Same row-level parallelism as the existing F16
+ 17402:      * matvec, but each row now uses F16C/AVX2.
+ 17403:      */
+ 17404:     ds4_parallel_for_min_rows(
+ 17405:         DS4_N_EXPERT,
+ 17406:         cpu_v18_fast_router_worker,
+ 17407:         &ctx,
+ 17408:         1);
+ 17409: 
+ 17410:     const float *bias =
+ 17411:         layer->ffn_exp_probs_b
+ 17412:             ? (const float *)
+ 17413:                 tensor_data(
+ 17414:                     model,
+ 17415:                     layer->ffn_exp_probs_b)
+ 17416:             : NULL;
+ 17417: 
+ 17418:     /*
+ 17419:      * Reproduce the shadow routing score semantics:
+ 17420:      *
+ 17421:      * score = sqrt(softplus(logit)) + bias
+ 17422:      *
+ 17423:      * Only IDs matter for speculative I/O.
+ 17424:      */
+ 17425:     for (uint32_t i = 0;
+ 17426:          i < DS4_N_EXPERT;
+ 17427:          i++) {
+ 17428: 
+ 17429:         score[i] =
+ 17430:             sqrtf(
+ 17431:                 softplus_stable(
+ 17432:                     score[i]));
+ 17433: 
+ 17434:         if (bias) {
+ 17435:             score[i] += bias[i];
+ 17436:         }
+ 17437:     }
+ 17438: 
+ 17439:     for (int i = 0;
+ 17440:          i < DS4_MAX_EXPERT_USED;
+ 17441:          i++) {
+ 17442: 
+ 17443:         selected[i] = -1;
+ 17444:     }
+ 17445: 
+ 17446:     topk_desc(
+ 17447:         score,
+ 17448:         (int)DS4_N_EXPERT,
+ 17449:         3,
+ 17450:         selected);
+ 17451: 
+ 17452:     return true;
+ 17453: 
+ 17454: #else
+ 17455: 
+ 17456:     (void)selected;
+ 17457:     (void)model;
+ 17458:     (void)layer;
+ 17459:     (void)x;
+ 17460: 
+ 17461:     return false;
+ 17462: 
+ 17463: #endif
+ 17464: }
+
+========================================================================================
+RELEVANT GLOBAL / STRUCT LINES
+========================================================================================
+ 13181:  * V18.6B — Pre-attention shadow-router feasibility probe.
+ 13197:     g_v18_shadow_a[DS4_MAX_LAYER]
+ 13201:     g_v18_shadow_b[DS4_MAX_LAYER]
+ 13205:     g_v18_shadow_valid[DS4_MAX_LAYER];
+ 13208:     g_v18_shadow_ready_sec[DS4_MAX_LAYER];
+ 13211:     g_v18_shadow_eval = 0;
+ 13214: static bool cpu_v18_preattn_shadow_enabled(void) {
+ 13217:         getenv("DS4_CPU_V18_PREATTN_SHADOW_PROBE");
+ 13229:  * The V18.6B PREATTN_FFNNORM shadow route is used only to issue an early
+ 13241:  *   DS4_CPU_V18_PREATTN_EARLY_GU_BUDGET=1..6
+ 13258: static int cpu_v18_preattn_early_gu_budget(void) {
+ 13260:         getenv("DS4_CPU_V18_PREATTN_EARLY_GU_BUDGET");
+ 13271:                 "DS4_CPU_V18_PREATTN_EARLY_GU_BUDGET=%s; "
+ 13411: #define V19_AIO_SLOTS       3
+ 13469: typedef struct v19_aio_op {
+ 13491: typedef struct v19_aio_slot {
+ 13499:     int         predicted[V19_AIO_MAX_PRED];
+ 13507: } v19_aio_slot;
+ 13509: typedef struct v19_aio_state {
+ 13517:     v19_aio_slot  slot[V19_AIO_SLOTS];
+ 13593: static int cpu_v19_aio_budget(void) {
+ 13595:         getenv("DS4_CPU_V19_AIO_BUDGET");
+ 13767: static v19_aio_slot *
+ 13776:          s < V19_AIO_SLOTS;
+ 13779:         v19_aio_slot *slot =
+ 13780:             &g_v19_aio.slot[s];
+ 13836:             v19_aio_slot *slot =
+ 13919:          s < V19_AIO_SLOTS;
+ 13922:         v19_aio_slot *slot =
+ 13923:             &g_v19_aio.slot[s];
+ 14010:          s < V19_AIO_SLOTS;
+ 14013:         v19_aio_slot *slot =
+ 14014:             &g_v19_aio.slot[s];
+ 14291: static v19_aio_slot *
+ 14297:          s < V19_AIO_SLOTS;
+ 14300:         v19_aio_slot *slot =
+ 14301:             &g_v19_aio.slot[s];
+ 14335:         cpu_v19_aio_budget();
+ 14337:     v19_aio_slot *slot =
+ 14341:         g_v19_aio.no_slot++;
+ 14528:     v19_aio_slot *slot =
+ 14532:          s < V19_AIO_SLOTS;
+ 14535:         if (g_v19_aio.slot[s].active &&
+ 14536:             g_v19_aio.slot[s].il == il) {
+ 14539:                 &g_v19_aio.slot[s];
+ 14697:     g_v19_aio.predicted_hits +=
+ 14742:             g_v19_aio.predicted_hits,
+ 14746:             g_v19_aio.no_slot,
+ 14837:         const v19_aio_slot *slot) {
+ 14873:     v19_aio_slot *slot =
+ 15051:          s < V19_AIO_SLOTS;
+ 15054:         v19_aio_slot *slot =
+ 15055:             &g_v19_aio.slot[s];
+ 15139:          s < V19_AIO_SLOTS;
+ 15142:         v19_aio_slot *slot =
+ 15143:             &g_v19_aio.slot[s];
+ 15258:         const v19_aio_slot *slot) {
+ 15273: static v19_aio_slot *
+ 15278:          s < V19_AIO_SLOTS;
+ 15281:         v19_aio_slot *slot =
+ 15282:             &g_v19_aio.slot[s];
+ 15342:     v19_aio_slot *spec =
+ 15421:     v19_aio_slot *slot =
+ 15752:          s < V19_AIO_SLOTS;
+ 15755:         v19_aio_slot *slot =
+ 15756:             &g_v19_aio.slot[s];
+ 15935: static v19_aio_slot *
+ 15940:          s < V19_AIO_SLOTS;
+ 15943:         v19_aio_slot *slot =
+ 15944:             &g_v19_aio.slot[s];
+ 15960:         const v19_aio_slot *slot,
+ 16012:     v19_aio_slot *slot =
+ 16131:     v19_aio_slot *slot =
+ 16199:     v19_aio_slot *spec =
+ 16203:     v19_aio_slot *residual =
+ 16610:     v19_aio_slot *spec =
+ 16615:     v19_aio_slot *residual_slot =
+ 17154:         cpu_v18_preattn_early_gu_budget();
+ 17207:  * V18.8D_AVX2_SHADOW_ROUTER
+ 17217: static bool cpu_v18_fast_shadow_enabled(void) {
+ 17219:         getenv("DS4_CPU_V18_FAST_SHADOW");
+ 17226: static bool cpu_v18_fast_shadow_verify_enabled(void) {
+ 17228:         getenv("DS4_CPU_V18_FAST_SHADOW_VERIFY");
+ 17357: static bool cpu_v18_shadow_top3_fast(
+ 17470: static void cpu_v18_preattn_shadow_capture(
+ 17477:     if (!cpu_v18_preattn_shadow_enabled() ||
+ 17525:     if (cpu_v18_fast_shadow_enabled()) {
+ 17528:             cpu_v18_shadow_top3_fast(
+ 17529:                 g_v18_shadow_b[il],
+ 17538:             g_v18_shadow_b[il],
+ 17552:         cpu_v18_fast_shadow_verify_enabled()) {
+ 17568:                 g_v18_shadow_b[il][k]) {
+ 17582:             "ds4: v18.8d fast-shadow "
+ 17588:             g_v18_shadow_b[il][0],
+ 17589:             g_v18_shadow_b[il][1],
+ 17590:             g_v18_shadow_b[il][2],
+ 17609:         g_v18_shadow_b[il]);
+ 17616:         g_v18_shadow_b[il]);
+ 17621:     g_v18_shadow_ready_sec[il] =
+ 17624:     g_v18_shadow_valid[il] =
+ 17631:  * V18.7 production-like shadow mode.
+ 17639:  *   DS4_CPU_V18_PREATTN_SHADOW_COMPARE=0
+ 17644: static bool cpu_v18_preattn_shadow_compare_enabled(void) {
+ 17646:         getenv("DS4_CPU_V18_PREATTN_SHADOW_COMPARE");
+ 17654: static void cpu_v18_preattn_shadow_compare(
+ 17666:     if (!cpu_v18_preattn_shadow_compare_enabled()) {
+ 17668:             g_v18_shadow_valid[il] = false;
+ 17674:     if (!cpu_v18_preattn_shadow_enabled() ||
+ 17680:         !g_v18_shadow_valid[il]) {
+ 17692:          g_v18_shadow_ready_sec[il]) *
+ 17706:         g_v18_shadow_eval++;
+ 17711:         "ds4: v18 preattn shadow "
+ 17718:             g_v18_shadow_eval,
+ 17723:         g_v18_shadow_a[il][0],
+ 17724:         g_v18_shadow_a[il][1],
+ 17725:         g_v18_shadow_a[il][2],
+ 17726:         g_v18_shadow_a[il][3],
+ 17727:         g_v18_shadow_a[il][4],
+ 17728:         g_v18_shadow_a[il][5],
+ 17730:         g_v18_shadow_b[il][0],
+ 17731:         g_v18_shadow_b[il][1],
+ 17732:         g_v18_shadow_b[il][2],
+ 17733:         g_v18_shadow_b[il][3],
+ 17734:         g_v18_shadow_b[il][4],
+ 17735:         g_v18_shadow_b[il][5],
+ 17744:     g_v18_shadow_valid[il] =
+ 17807:     cpu_v18_preattn_shadow_compare(
+ 20156:     cpu_v18_preattn_shadow_capture(
+
+========================================================================================
+CALL SITES / KEY EXPRESSIONS
+========================================================================================
+
+--- cpu_v18_preattn_shadow_capture( ---
+ 17466: static uint64_t g_v18_fast_verify_records = 0;
+ 17467: static uint64_t g_v18_fast_verify_mismatch = 0;
+ 17468: 
+ 17469: 
+ 17470: static void cpu_v18_preattn_shadow_capture(
+ 17471:         const ds4_model         *model,
+ 17472:         const ds4_layer_weights *layer,
+ 17473:         uint32_t                 il,
+ 17474:         const float             *attn_norm,
+ 17475:         const float             *attn_cur) {
+ 17476: 
+ 17477:     if (!cpu_v18_preattn_shadow_enabled() ||
+
+ 20152: 
+ 20153:     t0 = profile ? now_sec() : 0.0;
+ 20154:     layer_attn_norm_one(scratch->attn_norm, model, layer, scratch->attn_cur);
+ 20155: 
+ 20156:     cpu_v18_preattn_shadow_capture(
+ 20157:         model,
+ 20158:         layer,
+ 20159:         il,
+ 20160:         scratch->attn_norm,
+ 20161:         scratch->attn_cur);
+ 20162:     const uint32_t ratio = cache->compress_ratio;
+ 20163:     layer_q_projection_with_lora_one_decode_scratch(model, layer,
+
+
+--- cpu_v18_preattn_early_gu_prefetch( ---
+ 17121: 
+ 17122: 
+ 17123: 
+ 17124: 
+ 17125: static void cpu_v18_preattn_early_gu_prefetch(
+ 17126:         const ds4_model         *model,
+ 17127:         const ds4_layer_weights *layer,
+ 17128:         uint32_t                 il,
+ 17129:         const int predicted[DS4_MAX_EXPERT_USED]) {
+ 17130: 
+ 17131:     if (!cpu_v18_preattn_early_gu_enabled() ||
+ 17132:         !model ||
+
+ 17608:         il,
+ 17609:         g_v18_shadow_b[il]);
+ 17610: 
+ 17611:     /* V18.7A: issue selective early Gate/Up I/O hints. */
+ 17612:     cpu_v18_preattn_early_gu_prefetch(
+ 17613:         model,
+ 17614:         layer,
+ 17615:         il,
+ 17616:         g_v18_shadow_b[il]);
+ 17617: 
+ 17618:     /*
+ 17619:      * This is the moment at which an early storage request could be issued.
+
+
+--- cpu_v19_aio_observe( ---
+ 12294: 
+ 12295: /*
+ 12296:  * V18.9A_FORWARD_DECL_FIX
+ 12297:  *
+ 12298:  * cpu_v19_aio_observe() is implemented later in this translation
+ 12299:  * unit, but routed MoE calls it before that definition.
+ 12300:  */
+ 12301: static void cpu_v19_aio_observe(
+ 12302:         uint32_t   il,
+ 12303:         const int *actual_selected);
+ 12304: 
+ 12305: static void cpu_v19_aio_release_layer(
+
+ 12297:  *
+ 12298:  * cpu_v19_aio_observe() is implemented later in this translation
+ 12299:  * unit, but routed MoE calls it before that definition.
+ 12300:  */
+ 12301: static void cpu_v19_aio_observe(
+ 12302:         uint32_t   il,
+ 12303:         const int *actual_selected);
+ 12304: 
+ 12305: static void cpu_v19_aio_release_layer(
+ 12306:         uint32_t il);
+ 12307: 
+ 12308: 
+
+ 12421:      * V18.9A feasibility deadline:
+ 12422:      * canonical selected expert IDs are now available, but Gate/Up
+ 12423:      * computation has not started yet.
+ 12424:      */
+ 12425:     cpu_v19_aio_observe(
+ 12426:         il,
+ 12427:         selected);
+ 12428: 
+ 12429:     /* V18.10B2 exact residual Gate/Up probe. */
+ 12430:     cpu_v20_residual_gu_submit(
+ 12431:         model,
+ 12432:         layer,
+
+ 14511:             slot->pending);
+ 14512:     }
+ 14513: }
+ 14514: 
+ 14515: static void cpu_v19_aio_observe(
+ 14516:         uint32_t    il,
+ 14517:         const int  *actual_selected) {
+ 14518: 
+ 14519:     if (!cpu_v19_aio_enabled() ||
+ 14520:         !g_v19_aio.ready ||
+ 14521:         !actual_selected) {
+ 14522: 
+
+
+--- topk_desc( ---
+ 11499:     layer_router_probs_one(probs, model, layer, x);
+ 11500:     layer_hash_router_weights_from_probs(weights_out, probs, selected);
+ 11501: }
+ 11502: 
+ 11503: static void topk_desc(const float *score, int n, int k, int *idx) {
+ 11504:     for (int i = 0; i < k; i++) idx[i] = -1;
+ 11505: 
+ 11506:     for (int i = 0; i < n; i++) {
+ 11507:         for (int j = 0; j < k; j++) {
+ 11508:             if (idx[j] < 0 || score[i] > score[idx[j]]) {
+ 11509:                 for (int m = k - 1; m > j; m--) idx[m] = idx[m - 1];
+ 11510:                 idx[j] = i;
+
+ 11549:         const float *bias = tensor_data(model, layer->ffn_exp_probs_b);
+ 11550:         for (uint32_t i = 0; i < DS4_N_EXPERT; i++) selection[i] += bias[i];
+ 11551:     }
+ 11552: 
+ 11553:     topk_desc(selection, (int)DS4_N_EXPERT, (int)DS4_N_EXPERT_USED, selected);
+ 11554: 
+ 11555:     float sum = 0.0f;
+ 11556:     for (uint32_t i = 0; i < DS4_N_EXPERT_USED; i++) {
+ 11557:         expert_weight[i] = probs[selected[i]];
+ 11558:         sum += expert_weight[i];
+ 11559:     }
+ 11560:     if (sum < 6.103515625e-5f) sum = 6.103515625e-5f;
+
+ 17442: 
+ 17443:         selected[i] = -1;
+ 17444:     }
+ 17445: 
+ 17446:     topk_desc(
+ 17447:         score,
+ 17448:         (int)DS4_N_EXPERT,
+ 17449:         3,
+ 17450:         selected);
+ 17451: 
+ 17452:     return true;
+ 17453: 
+
+ 21808:         probs[i] = sigmoid_stable(logits[i]);
+ 21809:         selection[i] = probs[i] + bias[i];
+ 21810:     }
+ 21811: 
+ 21812:     topk_desc(selection, (int)DS4_N_EXPERT, (int)DS4_N_EXPERT_USED, selected);
+ 21813: 
+ 21814:     float sum = 0.0f;
+ 21815:     for (uint32_t i = 0; i < DS4_N_EXPERT_USED; i++) {
+ 21816:         if (selected[i] < 0 || (uint32_t)selected[i] >= DS4_N_EXPERT) {
+ 21817:             ds4_die("GLM selected expert is outside router range");
+ 21818:         }
+ 21819:         expert_weight[i] = probs[selected[i]];
+
+
+--- DS4_CPU_V19_AIO_BUDGET ---
+ 13591: 
+ 13592: 
+ 13593: static int cpu_v19_aio_budget(void) {
+ 13594:     const char *s =
+ 13595:         getenv("DS4_CPU_V19_AIO_BUDGET");
+ 13596: 
+ 13597:     if (!s || !s[0]) {
+ 13598:         return 1;
+ 13599:     }
+ 13600: 
+ 13601:     int n = atoi(s);
+ 13602: 
+
+
+--- predicted[ ---
+ 13495: 
+ 13496:     uint32_t    il;
+ 13497: 
+ 13498:     int         budget;
+ 13499:     int         predicted[V19_AIO_MAX_PRED];
+ 13500: 
+ 13501:     int         nops;
+ 13502:     int         pending;
+ 13503: 
+ 13504:     double      submit_sec;
+ 13505: 
+ 13506:     v19_aio_op  op[V19_AIO_MAX_OPS];
+
+ 14311: static void cpu_v19_aio_submit_gu(
+ 14312:         const ds4_model          *model,
+ 14313:         const ds4_layer_weights  *layer,
+ 14314:         uint32_t                  il,
+ 14315:         const int predicted[
+ 14316:             DS4_MAX_EXPERT_USED]) {
+ 14317: 
+ 14318:     if (!cpu_v19_aio_enabled() ||
+ 14319:         !model ||
+ 14320:         !layer ||
+ 14321:         !predicted ||
+ 14322:         il >= DS4_MAX_LAYER ||
+
+ 14370:     for (int i = 0;
+ 14371:          i < V19_AIO_MAX_PRED;
+ 14372:          i++) {
+ 14373: 
+ 14374:         slot->predicted[i] =
+ 14375:             i < budget
+ 14376:                 ? predicted[i]
+ 14377:                 : -1;
+ 14378:     }
+ 14379: 
+ 14380:     struct iocb *list[
+ 14381:         V19_AIO_MAX_OPS];
+
+ 14372:          i++) {
+ 14373: 
+ 14374:         slot->predicted[i] =
+ 14375:             i < budget
+ 14376:                 ? predicted[i]
+ 14377:                 : -1;
+ 14378:     }
+ 14379: 
+ 14380:     struct iocb *list[
+ 14381:         V19_AIO_MAX_OPS];
+ 14382: 
+ 14383:     int n = 0;
+
+ 14386:          i < budget;
+ 14387:          i++) {
+ 14388: 
+ 14389:         const int expert =
+ 14390:             predicted[i];
+ 14391: 
+ 14392:         if (expert < 0 ||
+ 14393:             expert >=
+ 14394:                 (int)DS4_N_EXPERT) {
+ 14395: 
+ 14396:             continue;
+ 14397:         }
+
+ 14555:      * Read-only diagnostics.
+ 14556:      *
+ 14557:      * We already have both:
+ 14558:      *
+ 14559:      *   slot->predicted[]  = pre-attention speculative experts
+ 14560:      *   actual_selected[]  = canonical router experts
+ 14561:      *
+ 14562:      * Log them together so cross-token reuse can be simulated
+ 14563:      * offline without allocating a persistent expert cache.
+ 14564:      */
+ 14565:     {
+ 14566:         const char *v20_probe =
+
+ 14603:                 "actual=%d,%d,%d,%d,%d,%d "
+ 14604:                 "gu_bytes=%" PRIu64 "\n",
+ 14605:                 (unsigned)il,
+ 14606:                 slot->budget > 0
+ 14607:                     ? slot->predicted[0]
+ 14608:                     : -1,
+ 14609:                 slot->budget > 1
+ 14610:                     ? slot->predicted[1]
+ 14611:                     : -1,
+ 14612:                 actual_selected[0],
+ 14613:                 actual_selected[1],
+ 14614:                 actual_selected[2],
+
+ 14606:                 slot->budget > 0
+ 14607:                     ? slot->predicted[0]
+ 14608:                     : -1,
+ 14609:                 slot->budget > 1
+ 14610:                     ? slot->predicted[1]
+ 14611:                     : -1,
+ 14612:                 actual_selected[0],
+ 14613:                 actual_selected[1],
+ 14614:                 actual_selected[2],
+ 14615:                 actual_selected[3],
+ 14616:                 actual_selected[4],
+ 14617:                 actual_selected[5],
+
+ 14628:          p < slot->budget;
+ 14629:          p++) {
+ 14630: 
+ 14631:         const int expert =
+ 14632:             slot->predicted[p];
+ 14633: 
+ 14634:         if (expert < 0) {
+ 14635:             continue;
+ 14636:         }
+ 14637: 
+ 14638:         bool hit = false;
+ 14639: 
+
+ 14729:             "no_slot=%" PRIu64 " "
+ 14730:             "errors=%" PRIu64 "\n",
+ 14731:             (unsigned)il,
+ 14732:             slot->budget,
+ 14733:             slot->predicted[0],
+ 14734:             slot->predicted[1],
+ 14735:             slot->predicted[2],
+ 14736:             pred_hits,
+ 14737:             ready,
+ 14738:             useful,
+ 14739:             slot->pending,
+ 14740:             elapsed_ms,
+
+ 14730:             "errors=%" PRIu64 "\n",
+ 14731:             (unsigned)il,
+ 14732:             slot->budget,
+ 14733:             slot->predicted[0],
+ 14734:             slot->predicted[1],
+ 14735:             slot->predicted[2],
+ 14736:             pred_hits,
+ 14737:             ready,
+ 14738:             useful,
+ 14739:             slot->pending,
+ 14740:             elapsed_ms,
+ 14741:             g_v19_aio.observations,
+
+ 14731:             (unsigned)il,
+ 14732:             slot->budget,
+ 14733:             slot->predicted[0],
+ 14734:             slot->predicted[1],
+ 14735:             slot->predicted[2],
+ 14736:             pred_hits,
+ 14737:             ready,
+ 14738:             useful,
+ 14739:             slot->pending,
+ 14740:             elapsed_ms,
+ 14741:             g_v19_aio.observations,
+ 14742:             g_v19_aio.predicted_hits,
+
+ 15385:         for (int k = 0;
+ 15386:              k < spec->budget;
+ 15387:              k++) {
+ 15388: 
+ 15389:             if (spec->predicted[k] ==
+ 15390:                 expert) {
+ 15391: 
+ 15392:                 covered = true;
+ 15393:                 break;
+ 15394:             }
+ 15395:         }
+ 15396: 
+
+ 15479:     for (int i = 0;
+ 15480:          i < V19_AIO_MAX_PRED;
+ 15481:          i++) {
+ 15482: 
+ 15483:         slot->predicted[i] =
+ 15484:             -1;
+ 15485:     }
+ 15486: 
+ 15487: 
+ 15488:     struct iocb *list[
+ 15489:         V19_AIO_MAX_OPS];
+ 15490: 
+
+ 15555:             continue;
+ 15556:         }
+ 15557: 
+ 15558: 
+ 15559:         slot->predicted[accepted] =
+ 15560:             expert;
+ 15561: 
+ 15562: 
+ 15563:         list[nops] =
+ 15564:             &gate->cb;
+ 15565: 
+ 15566:         list[nops + 1] =
+
+ 15681:             (unsigned)il,
+ 15682:             accepted,
+ 15683: 
+ 15684:             spec->budget > 0
+ 15685:                 ? spec->predicted[0]
+ 15686:                 : -1,
+ 15687: 
+ 15688:             spec->budget > 1
+ 15689:                 ? spec->predicted[1]
+ 15690:                 : -1,
+ 15691: 
+ 15692:             accepted > 0
+
+ 15685:                 ? spec->predicted[0]
+ 15686:                 : -1,
+ 15687: 
+ 15688:             spec->budget > 1
+ 15689:                 ? spec->predicted[1]
+ 15690:                 : -1,
+ 15691: 
+ 15692:             accepted > 0
+ 15693:                 ? slot->predicted[0]
+ 15694:                 : -1,
+ 15695: 
+ 15696:             accepted > 1
+
+ 15689:                 ? spec->predicted[1]
+ 15690:                 : -1,
+ 15691: 
+ 15692:             accepted > 0
+ 15693:                 ? slot->predicted[0]
+ 15694:                 : -1,
+ 15695: 
+ 15696:             accepted > 1
+ 15697:                 ? slot->predicted[1]
+ 15698:                 : -1,
+ 15699: 
+ 15700:             accepted > 2
+
+ 15693:                 ? slot->predicted[0]
+ 15694:                 : -1,
+ 15695: 
+ 15696:             accepted > 1
+ 15697:                 ? slot->predicted[1]
+ 15698:                 : -1,
+ 15699: 
+ 15700:             accepted > 2
+ 15701:                 ? slot->predicted[2]
+ 15702:                 : -1,
+ 15703: 
+ 15704:             accepted > 3
+
+ 15697:                 ? slot->predicted[1]
+ 15698:                 : -1,
+ 15699: 
+ 15700:             accepted > 2
+ 15701:                 ? slot->predicted[2]
+ 15702:                 : -1,
+ 15703: 
+ 15704:             accepted > 3
+ 15705:                 ? slot->predicted[3]
+ 15706:                 : -1,
+ 15707: 
+ 15708:             accepted > 4
+
+
+--- score[ ---
+ 11033:         uint32_t            n_kv) {
+ 11034:     const float *sinks = tensor_data(model, layer->attn_sinks);
+ 11035:     const float kq_scale = 1.0f / sqrtf((float)DS4_N_HEAD_DIM);
+ 11036:     float score_stack[512];
+ 11037:     float *score = n_kv <= 512 ? score_stack : xmalloc((size_t)n_kv * sizeof(score[0]));
+ 11038: 
+ 11039:     for (uint32_t h = 0; h < DS4_N_HEAD; h++) {
+ 11040:         const float *qh = q + (uint64_t)h * DS4_N_HEAD_DIM;
+ 11041: 
+ 11042:         float max_score = sinks[h];
+ 11043:         for (uint32_t r = 0; r < n_kv; r++) {
+ 11044:             const float *kv = kv_rows + (uint64_t)r * DS4_N_HEAD_DIM;
+
+ 11041: 
+ 11042:         float max_score = sinks[h];
+ 11043:         for (uint32_t r = 0; r < n_kv; r++) {
+ 11044:             const float *kv = kv_rows + (uint64_t)r * DS4_N_HEAD_DIM;
+ 11045:             score[r] = dot_f32(qh, kv, DS4_N_HEAD_DIM) * kq_scale;
+ 11046:             if (score[r] > max_score) max_score = score[r];
+ 11047:         }
+ 11048: 
+ 11049:         float *oh = out_heads + (uint64_t)h * DS4_N_HEAD_DIM;
+ 11050:         memset(oh, 0, (size_t)DS4_N_HEAD_DIM * sizeof(oh[0]));
+ 11051: 
+ 11052:         float denom = expf(sinks[h] - max_score);
+
+ 11042:         float max_score = sinks[h];
+ 11043:         for (uint32_t r = 0; r < n_kv; r++) {
+ 11044:             const float *kv = kv_rows + (uint64_t)r * DS4_N_HEAD_DIM;
+ 11045:             score[r] = dot_f32(qh, kv, DS4_N_HEAD_DIM) * kq_scale;
+ 11046:             if (score[r] > max_score) max_score = score[r];
+ 11047:         }
+ 11048: 
+ 11049:         float *oh = out_heads + (uint64_t)h * DS4_N_HEAD_DIM;
+ 11050:         memset(oh, 0, (size_t)DS4_N_HEAD_DIM * sizeof(oh[0]));
+ 11051: 
+ 11052:         float denom = expf(sinks[h] - max_score);
+ 11053:         for (uint32_t r = 0; r < n_kv; r++) {
+
+ 11050:         memset(oh, 0, (size_t)DS4_N_HEAD_DIM * sizeof(oh[0]));
+ 11051: 
+ 11052:         float denom = expf(sinks[h] - max_score);
+ 11053:         for (uint32_t r = 0; r < n_kv; r++) {
+ 11054:             const float weight = expf(score[r] - max_score);
+ 11055:             const float *kv = kv_rows + (uint64_t)r * DS4_N_HEAD_DIM;
+ 11056:             denom += weight;
+ 11057:             axpy_f32(oh, kv, weight, DS4_N_HEAD_DIM);
+ 11058:         }
+ 11059: 
+ 11060:         const float inv = 1.0f / denom;
+ 11061:         scale_f32(oh, inv, DS4_N_HEAD_DIM);
+
+ 11504:     for (int i = 0; i < k; i++) idx[i] = -1;
+ 11505: 
+ 11506:     for (int i = 0; i < n; i++) {
+ 11507:         for (int j = 0; j < k; j++) {
+ 11508:             if (idx[j] < 0 || score[i] > score[idx[j]]) {
+ 11509:                 for (int m = k - 1; m > j; m--) idx[m] = idx[m - 1];
+ 11510:                 idx[j] = i;
+ 11511:                 break;
+ 11512:             }
+ 11513:         }
+ 11514:     }
+ 11515: }
+
+ 17385: 
+ 17386:         return false;
+ 17387:     }
+ 17388: 
+ 17389:     float score[DS4_MAX_EXPERT];
+ 17390: 
+ 17391:     cpu_v18_fast_router_ctx ctx = {
+ 17392:         .logits = score,
+ 17393:         .data =
+ 17394:             (const uint16_t *)
+ 17395:                 tensor_data(model, router),
+ 17396:         .x = x,
+
+ 17425:     for (uint32_t i = 0;
+ 17426:          i < DS4_N_EXPERT;
+ 17427:          i++) {
+ 17428: 
+ 17429:         score[i] =
+ 17430:             sqrtf(
+ 17431:                 softplus_stable(
+ 17432:                     score[i]));
+ 17433: 
+ 17434:         if (bias) {
+ 17435:             score[i] += bias[i];
+ 17436:         }
+
+ 17428: 
+ 17429:         score[i] =
+ 17430:             sqrtf(
+ 17431:                 softplus_stable(
+ 17432:                     score[i]));
+ 17433: 
+ 17434:         if (bias) {
+ 17435:             score[i] += bias[i];
+ 17436:         }
+ 17437:     }
+ 17438: 
+ 17439:     for (int i = 0;
+
+ 17431:                 softplus_stable(
+ 17432:                     score[i]));
+ 17433: 
+ 17434:         if (bias) {
+ 17435:             score[i] += bias[i];
+ 17436:         }
+ 17437:     }
+ 17438: 
+ 17439:     for (int i = 0;
+ 17440:          i < DS4_MAX_EXPERT_USED;
+ 17441:          i++) {
+ 17442: 
+
+ 18858:             cache->layer[il].attn_comp_kv = xmalloc_zeroed((size_t)comp_cap * DS4_N_HEAD_DIM, sizeof(float));
+ 18859:             cache->layer[il].attn_state_kv = xmalloc_zeroed((size_t)attn_width * attn_rows, sizeof(float));
+ 18860:             cache->layer[il].attn_state_score = xmalloc((size_t)attn_width * attn_rows * sizeof(float));
+ 18861:             for (uint64_t i = 0; i < (uint64_t)attn_width * attn_rows; i++) {
+ 18862:                 cache->layer[il].attn_state_score[i] = DS4_NEG_INF;
+ 18863:             }
+ 18864: 
+ 18865:             if (ratio == 4) {
+ 18866:                 const uint32_t index_width = coff * DS4_N_INDEXER_HEAD_DIM;
+ 18867:                 const uint32_t index_rows = coff * ratio;
+ 18868:                 cache->layer[il].index_comp_kv = xmalloc_zeroed((size_t)comp_cap * DS4_N_INDEXER_HEAD_DIM, sizeof(float));
+ 18869:                 cache->layer[il].index_state_kv = xmalloc_zeroed((size_t)index_width * index_rows, sizeof(float));
+
+ 18868:                 cache->layer[il].index_comp_kv = xmalloc_zeroed((size_t)comp_cap * DS4_N_INDEXER_HEAD_DIM, sizeof(float));
+ 18869:                 cache->layer[il].index_state_kv = xmalloc_zeroed((size_t)index_width * index_rows, sizeof(float));
+ 18870:                 cache->layer[il].index_state_score = xmalloc((size_t)index_width * index_rows * sizeof(float));
+ 18871:                 for (uint64_t i = 0; i < (uint64_t)index_width * index_rows; i++) {
+ 18872:                     cache->layer[il].index_state_score[i] = DS4_NEG_INF;
+ 18873:                 }
+ 18874:             }
+ 18875:         }
+ 18876:     }
+ 18877: }
+ 18878: 
+ 18879: static void kv_cache_free(ds4_kv_cache *cache) {
+
+ 18932:     for (uint32_t row = clear_start; row < clear_end; row++) {
+ 18933:         float *kv = state_kv + (uint64_t)row * width;
+ 18934:         float *score = state_score + (uint64_t)row * width;
+ 18935:         memset(kv, 0, (size_t)width * sizeof(kv[0]));
+ 18936:         for (uint32_t i = 0; i < width; i++) score[i] = DS4_NEG_INF;
+ 18937:     }
+ 18938: }
+ 18939: 
+ 18940: static void kv_cache_finish_prefill_states(ds4_kv_cache *cache, uint32_t n_tokens) {
+ 18941:     for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
+ 18942:         ds4_layer_cache *layer = &cache->layer[il];
+ 18943:         const uint32_t ratio = layer->compress_ratio;
+
+ 18973:         float max_score = DS4_NEG_INF;
+ 18974: 
+ 18975:         if (compress_ratio == 4) {
+ 18976:             for (uint32_t r = 0; r < compress_ratio; r++) {
+ 18977:                 const float sp = state_score[(uint64_t)r * width + j];
+ 18978:                 const float sc = state_score[(uint64_t)(compress_ratio + r) * width + head_dim + j];
+ 18979:                 if (sp > max_score) max_score = sp;
+ 18980:                 if (sc > max_score) max_score = sc;
+ 18981:             }
+ 18982:         } else {
+ 18983:             for (uint32_t r = 0; r < compress_ratio; r++) {
+ 18984:                 const float s = state_score[(uint64_t)r * width + j];
+
+ 18974: 
+ 18975:         if (compress_ratio == 4) {
+ 18976:             for (uint32_t r = 0; r < compress_ratio; r++) {
+ 18977:                 const float sp = state_score[(uint64_t)r * width + j];
+ 18978:                 const float sc = state_score[(uint64_t)(compress_ratio + r) * width + head_dim + j];
+ 18979:                 if (sp > max_score) max_score = sp;
+ 18980:                 if (sc > max_score) max_score = sc;
+ 18981:             }
+ 18982:         } else {
+ 18983:             for (uint32_t r = 0; r < compress_ratio; r++) {
+ 18984:                 const float s = state_score[(uint64_t)r * width + j];
+ 18985:                 if (s > max_score) max_score = s;
+
+ 18980:                 if (sc > max_score) max_score = sc;
+ 18981:             }
+ 18982:         } else {
+ 18983:             for (uint32_t r = 0; r < compress_ratio; r++) {
+ 18984:                 const float s = state_score[(uint64_t)r * width + j];
+ 18985:                 if (s > max_score) max_score = s;
+ 18986:             }
+ 18987:         }
+ 18988: 
+ 18989:         if (max_score <= DS4_NEG_INF * 0.5f) {
+ 18990:             out[j] = 0.0f;
+ 18991:             continue;
+
+ 18994:         float denom = 0.0f;
+ 18995:         float sum = 0.0f;
+ 18996:         if (compress_ratio == 4) {
+ 18997:             for (uint32_t r = 0; r < compress_ratio; r++) {
+ 18998:                 const float wp = expf(state_score[(uint64_t)r * width + j] - max_score);
+ 18999:                 const float wc = expf(state_score[(uint64_t)(compress_ratio + r) * width + head_dim + j] - max_score);
+ 19000:                 denom += wp + wc;
+ 19001:                 sum += wp * state_kv[(uint64_t)r * width + j];
+ 19002:                 sum += wc * state_kv[(uint64_t)(compress_ratio + r) * width + head_dim + j];
+ 19003:             }
+ 19004:         } else {
+ 19005:             for (uint32_t r = 0; r < compress_ratio; r++) {
+
+ 18995:         float sum = 0.0f;
+ 18996:         if (compress_ratio == 4) {
+ 18997:             for (uint32_t r = 0; r < compress_ratio; r++) {
+ 18998:                 const float wp = expf(state_score[(uint64_t)r * width + j] - max_score);
+ 18999:                 const float wc = expf(state_score[(uint64_t)(compress_ratio + r) * width + head_dim + j] - max_score);
+ 19000:                 denom += wp + wc;
+ 19001:                 sum += wp * state_kv[(uint64_t)r * width + j];
+ 19002:                 sum += wc * state_kv[(uint64_t)(compress_ratio + r) * width + head_dim + j];
+ 19003:             }
+ 19004:         } else {
+ 19005:             for (uint32_t r = 0; r < compress_ratio; r++) {
+ 19006:                 const float w = expf(state_score[(uint64_t)r * width + j] - max_score);
+
+ 19002:                 sum += wc * state_kv[(uint64_t)(compress_ratio + r) * width + head_dim + j];
+ 19003:             }
+ 19004:         } else {
+ 19005:             for (uint32_t r = 0; r < compress_ratio; r++) {
+ 19006:                 const float w = expf(state_score[(uint64_t)r * width + j] - max_score);
+ 19007:                 denom += w;
+ 19008:                 sum += w * state_kv[(uint64_t)r * width + j];
+ 19009:             }
+ 19010:         }
+ 19011: 
+ 19012:         out[j] = denom > 0.0f ? sum / denom : 0.0f;
+ 19013:     }
+
+ 19095:                    state_kv + (uint64_t)(compress_ratio + r) * width,
+ 19096:                    (size_t)width * sizeof(state_kv[0]));
+ 19097:             memcpy(state_score + (uint64_t)r * width,
+ 19098:                    state_score + (uint64_t)(compress_ratio + r) * width,
+ 19099:                    (size_t)width * sizeof(state_score[0]));
+ 19100:         }
+ 19101:         for (uint32_t r = 0; r < compress_ratio; r++) {
+ 19102:             memcpy(state_kv + (uint64_t)(compress_ratio + r) * width,
+ 19103:                    state_kv + (uint64_t)r * width,
+ 19104:                    (size_t)width * sizeof(state_kv[0]));
+ 19105:             memcpy(state_score + (uint64_t)(compress_ratio + r) * width,
+ 19106:                    state_score + (uint64_t)r * width,
+
+ 19103:                    state_kv + (uint64_t)r * width,
+ 19104:                    (size_t)width * sizeof(state_kv[0]));
+ 19105:             memcpy(state_score + (uint64_t)(compress_ratio + r) * width,
+ 19106:                    state_score + (uint64_t)r * width,
+ 19107:                    (size_t)width * sizeof(state_score[0]));
+ 19108:         }
+ 19109:     }
+ 19110: 
+ 19111:     free(pooled);
+ 19112:     return true;
+ 19113: }
+ 19114: 
+

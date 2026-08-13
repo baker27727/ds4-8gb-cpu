@@ -1,0 +1,2817 @@
+
+==============================================================================================================
+SOURCE LINES 1967-2156
+==============================================================================================================
+  1967: typedef void (*ds4_parallel_fn)(void *ctx, uint64_t row0, uint64_t row1);
+  1968: 
+  1969: #define DS4_MAX_THREADS 32
+  1970: 
+  1971: typedef struct {
+  1972:     pthread_t threads[DS4_MAX_THREADS];
+  1973:     pthread_mutex_t mutex;
+  1974:     pthread_cond_t work_cond;
+  1975:     pthread_cond_t done_cond;
+  1976:     uint32_t n_threads;
+  1977:     uint32_t n_workers;
+  1978:     uint32_t generation;
+  1979:     uint32_t done;
+  1980:     bool initialized;
+  1981:     bool shutdown;
+  1982:     ds4_parallel_fn fn;
+  1983:     void *ctx;
+  1984:     uint64_t n_rows;
+  1985: } ds4_thread_pool;
+  1986: 
+  1987: static ds4_thread_pool g_pool;
+  1988: static __thread int g_parallel_depth;
+  1989: static uint32_t g_requested_threads;
+  1990: 
+  1991: static void *ds4_worker_main(void *arg) {
+  1992:     const uint32_t tid = (uint32_t)(uintptr_t)arg;
+  1993:     uint32_t seen_generation = 0;
+  1994: 
+  1995:     for (;;) {
+  1996:         pthread_mutex_lock(&g_pool.mutex);
+  1997:         while (seen_generation == g_pool.generation && !g_pool.shutdown) {
+  1998:             pthread_cond_wait(&g_pool.work_cond, &g_pool.mutex);
+  1999:         }
+  2000:         if (g_pool.shutdown) {
+  2001:             pthread_mutex_unlock(&g_pool.mutex);
+  2002:             return NULL;
+  2003:         }
+  2004: 
+  2005:         seen_generation = g_pool.generation;
+  2006:         ds4_parallel_fn fn = g_pool.fn;
+  2007:         void *ctx = g_pool.ctx;
+  2008:         const uint64_t n_rows = g_pool.n_rows;
+  2009:         const uint32_t n_threads = g_pool.n_threads;
+  2010:         pthread_mutex_unlock(&g_pool.mutex);
+  2011: 
+  2012:         const uint64_t rows_per_thread = (n_rows + n_threads - 1) / n_threads;
+  2013:         const uint64_t row0 = (uint64_t)tid * rows_per_thread;
+  2014:         uint64_t row1 = row0 + rows_per_thread;
+  2015:         if (row1 > n_rows) row1 = n_rows;
+  2016:         if (row0 < row1) {
+  2017:             g_parallel_depth++;
+  2018:             fn(ctx, row0, row1);
+  2019:             g_parallel_depth--;
+  2020:         }
+  2021: 
+  2022:         pthread_mutex_lock(&g_pool.mutex);
+  2023:         g_pool.done++;
+  2024:         if (g_pool.done == g_pool.n_workers) {
+  2025:             pthread_cond_signal(&g_pool.done_cond);
+  2026:         }
+  2027:         pthread_mutex_unlock(&g_pool.mutex);
+  2028:     }
+  2029: }
+  2030: 
+  2031: /* Create the persistent CPU worker pool.  Decode reuses these threads instead
+  2032:  * of creating pthreads in the token loop. */
+  2033: static void ds4_threads_init(void) {
+  2034:     if (g_pool.initialized) return;
+  2035: 
+  2036:     pthread_once(&iq2xxs_signed_grid_once, iq2xxs_signed_grid_init);
+  2037: 
+  2038:     uint32_t n_threads = 12;
+  2039:     const long online_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+  2040:     if (online_cpus > 0) {
+  2041:         n_threads = online_cpus < 12 ? (uint32_t)online_cpus : 12;
+  2042:     }
+  2043: 
+  2044:     const char *env = getenv("DS4_THREADS");
+  2045:     if (env && env[0]) {
+  2046:         long v = strtol(env, NULL, 10);
+  2047:         if (v > 0) n_threads = (uint32_t)v;
+  2048:     }
+  2049:     if (g_requested_threads > 0) n_threads = g_requested_threads;
+  2050:     if (n_threads > DS4_MAX_THREADS) n_threads = DS4_MAX_THREADS;
+  2051:     if (n_threads == 0) n_threads = 1;
+  2052: 
+  2053:     pthread_mutex_init(&g_pool.mutex, NULL);
+  2054:     pthread_cond_init(&g_pool.work_cond, NULL);
+  2055:     pthread_cond_init(&g_pool.done_cond, NULL);
+  2056:     g_pool.n_threads = n_threads;
+  2057:     g_pool.n_workers = n_threads > 0 ? n_threads - 1 : 0;
+  2058:     g_pool.generation = 0;
+  2059:     g_pool.done = 0;
+  2060:     g_pool.shutdown = false;
+  2061:     g_pool.initialized = true;
+  2062: 
+  2063:     for (uint32_t i = 1; i < n_threads; i++) {
+  2064:         if (pthread_create(&g_pool.threads[i], NULL, ds4_worker_main, (void *)(uintptr_t)i) != 0) {
+  2065:             ds4_die("failed to create worker thread");
+  2066:         }
+  2067:     }
+  2068: }
+  2069: 
+  2070: static void ds4_threads_shutdown(void) {
+  2071:     if (!g_pool.initialized) return;
+  2072: 
+  2073:     pthread_mutex_lock(&g_pool.mutex);
+  2074:     g_pool.shutdown = true;
+  2075:     g_pool.generation++;
+  2076:     pthread_cond_broadcast(&g_pool.work_cond);
+  2077:     pthread_mutex_unlock(&g_pool.mutex);
+  2078: 
+  2079:     for (uint32_t i = 1; i < g_pool.n_threads; i++) {
+  2080:         pthread_join(g_pool.threads[i], NULL);
+  2081:     }
+  2082: 
+  2083:     pthread_cond_destroy(&g_pool.done_cond);
+  2084:     pthread_cond_destroy(&g_pool.work_cond);
+  2085:     pthread_mutex_destroy(&g_pool.mutex);
+  2086:     memset(&g_pool, 0, sizeof(g_pool));
+  2087: }
+  2088: 
+  2089: /* Run a row-parallel CPU kernel, falling back to serial execution for small
+  2090:  * jobs or nested calls where spawning more work would only add latency. */
+  2091: static void ds4_parallel_for_min_rows(uint64_t n_rows, ds4_parallel_fn fn, void *ctx, uint64_t min_parallel_rows) {
+  2092:     ds4_threads_init();
+  2093: 
+  2094:     if (g_parallel_depth > 0 || g_pool.n_threads <= 1 || n_rows < min_parallel_rows) {
+  2095:         fn(ctx, 0, n_rows);
+  2096:         return;
+  2097:     }
+  2098: 
+  2099:     pthread_mutex_lock(&g_pool.mutex);
+  2100:     g_pool.fn = fn;
+  2101:     g_pool.ctx = ctx;
+  2102:     g_pool.n_rows = n_rows;
+  2103:     g_pool.done = 0;
+  2104:     g_pool.generation++;
+  2105:     pthread_cond_broadcast(&g_pool.work_cond);
+  2106: 
+  2107:     const uint64_t rows_per_thread = (n_rows + g_pool.n_threads - 1) / g_pool.n_threads;
+  2108:     uint64_t main_row1 = rows_per_thread;
+  2109:     if (main_row1 > n_rows) main_row1 = n_rows;
+  2110:     pthread_mutex_unlock(&g_pool.mutex);
+  2111: 
+  2112:     if (main_row1 > 0) {
+  2113:         g_parallel_depth++;
+  2114:         fn(ctx, 0, main_row1);
+  2115:         g_parallel_depth--;
+  2116:     }
+  2117: 
+  2118:     pthread_mutex_lock(&g_pool.mutex);
+  2119:     while (g_pool.done < g_pool.n_workers) {
+  2120:         pthread_cond_wait(&g_pool.done_cond, &g_pool.mutex);
+  2121:     }
+  2122:     pthread_mutex_unlock(&g_pool.mutex);
+  2123: }
+  2124: 
+  2125: static void ds4_parallel_for(uint64_t n_rows, ds4_parallel_fn fn, void *ctx) {
+  2126:     ds4_parallel_for_min_rows(n_rows, fn, ctx, 512);
+  2127: }
+  2128: 
+  2129: static void cursor_error(ds4_cursor *c, const char *msg) {
+  2130:     if (c->error[0] == '\0') {
+  2131:         snprintf(c->error, sizeof(c->error), "%s at byte %" PRIu64, msg, c->pos);
+  2132:     }
+  2133: }
+  2134: 
+  2135: static bool cursor_has(ds4_cursor *c, uint64_t n) {
+  2136:     if (n > c->size || c->pos > c->size - n) {
+  2137:         cursor_error(c, "truncated GGUF file");
+  2138:         return false;
+  2139:     }
+  2140:     return true;
+  2141: }
+  2142: 
+  2143: static bool cursor_read(ds4_cursor *c, void *dst, uint64_t n) {
+  2144:     if (!cursor_has(c, n)) return false;
+  2145:     memcpy(dst, c->base + c->pos, (size_t)n);
+  2146:     c->pos += n;
+  2147:     return true;
+  2148: }
+  2149: 
+  2150: static bool cursor_skip(ds4_cursor *c, uint64_t n) {
+  2151:     if (!cursor_has(c, n)) return false;
+  2152:     c->pos += n;
+  2153:     return true;
+  2154: }
+  2155: 
+  2156: static bool cursor_u32(ds4_cursor *c, uint32_t *v) {
+
+==============================================================================================================
+SOURCE LINES 7028-7078
+==============================================================================================================
+  7028:         const uint16_t *row = ctx->data + o * ctx->in_dim;
+  7029:         ctx->out[o] = dot_f16_row(row, ctx->x, ctx->in_dim);
+  7030:     }
+  7031: }
+  7032: 
+  7033: /* Dense F16 matvec for small control projections such as HC and router heads. */
+  7034: static void matvec_f16(float *out, const ds4_model *m, const ds4_tensor *w, const float *x) {
+  7035:     if (w->type != 1 || w->ndim != 2) ds4_die("expected a 2D F16 tensor");
+  7036: 
+  7037:     const uint64_t in_dim = w->dim[0];
+  7038:     const uint64_t out_dim = w->dim[1];
+  7039:     matvec_f16_ctx ctx = {
+  7040:         .out = out,
+  7041:         .data = tensor_data(m, w),
+  7042:         .x = x,
+  7043:         .in_dim = in_dim,
+  7044:     };
+  7045: 
+  7046:     const uint64_t ops = in_dim * out_dim;
+  7047:     const uint64_t min_rows = ops >= 262144 ? 1 : 512;
+  7048:     ds4_parallel_for_min_rows(out_dim, matvec_f16_worker, &ctx, min_rows);
+  7049: }
+  7050: 
+  7051: static void matvec_f16_serial(float *out, const ds4_model *m, const ds4_tensor *w, const float *x) {
+  7052:     if (w->type != 1 || w->ndim != 2) ds4_die("expected a 2D F16 tensor");
+  7053: 
+  7054:     const uint64_t in_dim = w->dim[0];
+  7055:     const uint64_t out_dim = w->dim[1];
+  7056:     const uint16_t *data = tensor_data(m, w);
+  7057:     for (uint64_t o = 0; o < out_dim; o++) {
+  7058:         out[o] = dot_f16_row(data + o * in_dim, x, in_dim);
+  7059:     }
+  7060: }
+  7061: 
+  7062: typedef struct {
+  7063:     float *out;
+  7064:     const uint8_t *data;
+  7065:     const int8_t *xq;
+  7066:     const float *xscale;
+  7067:     uint64_t in_dim;
+  7068:     uint64_t row0;
+  7069:     uint64_t blocks;
+  7070: } matvec_q8_0_ctx;
+  7071: 
+  7072: typedef struct {
+  7073:     float *out0;
+  7074:     float *out1;
+  7075:     const uint8_t *data0;
+  7076:     const uint8_t *data1;
+  7077:     const int8_t *xq;
+  7078:     const float *xscale;
+
+==============================================================================================================
+SOURCE LINES 7416-7466
+==============================================================================================================
+  7416:         quantize_q8_0_activation(ctx->x + t * ctx->in_dim,
+  7417:                                  ctx->xq + t * ctx->blocks * 32,
+  7418:                                  ctx->xscale + t * ctx->blocks,
+  7419:                                  ctx->in_dim);
+  7420:     }
+  7421: }
+  7422: 
+  7423: static void quantize_q8_0_activation_batch(
+  7424:         const float *x,
+  7425:         int8_t      *xq,
+  7426:         float       *xscale,
+  7427:         uint64_t     n_tok,
+  7428:         uint64_t     in_dim) {
+  7429:     quantize_q8_0_batch_ctx ctx = {
+  7430:         .x = x,
+  7431:         .xq = xq,
+  7432:         .xscale = xscale,
+  7433:         .in_dim = in_dim,
+  7434:         .blocks = (in_dim + 31) / 32,
+  7435:     };
+  7436:     ds4_parallel_for(n_tok, quantize_q8_0_batch_worker, &ctx);
+  7437: }
+  7438: 
+  7439: static void matvec_q8_0_worker(void *vctx, uint64_t r0, uint64_t r1) {
+  7440:     matvec_q8_0_ctx *ctx = vctx;
+  7441: 
+  7442:     for (uint64_t r = r0; r < r1; r++) {
+  7443:         const uint64_t o = ctx->row0 + r;
+  7444:         const uint8_t *row = ctx->data + o * ctx->blocks * 34;
+  7445:         ctx->out[r] = dot_q8_0_row(row, ctx->xq, ctx->xscale, ctx->in_dim, ctx->blocks);
+  7446:     }
+  7447: }
+  7448: 
+  7449: static void matvec_q8_0_pair_worker(void *vctx, uint64_t r0, uint64_t r1) {
+  7450:     matvec_q8_0_pair_ctx *ctx = vctx;
+  7451: 
+  7452:     for (uint64_t r = r0; r < r1; r++) {
+  7453:         const uint8_t *row0 = ctx->data0 + r * ctx->blocks * 34;
+  7454:         const uint8_t *row1 = ctx->data1 + r * ctx->blocks * 34;
+  7455:         dot_q8_0_row_pair(row0, row1, ctx->xq, ctx->xscale, ctx->in_dim, ctx->blocks,
+  7456:                           ctx->out0 + r, ctx->out1 + r);
+  7457:     }
+  7458: }
+  7459: 
+  7460: static void matvec_q8_0_grouped_worker(void *vctx, uint64_t r0, uint64_t r1) {
+  7461:     matvec_q8_0_grouped_ctx *ctx = vctx;
+  7462: 
+  7463:     for (uint64_t idx = r0; idx < r1; idx++) {
+  7464:         const uint64_t group = idx / ctx->rank;
+  7465:         const uint64_t row_in_group = idx - group * ctx->rank;
+  7466:         const uint64_t tensor_row = group * ctx->rank + row_in_group;
+
+==============================================================================================================
+SOURCE LINES 7572-7763
+==============================================================================================================
+  7572:         const int8_t    * xq,
+  7573:         const float     * xscale,
+  7574:         uint64_t          row0,
+  7575:         uint64_t          n_rows) {
+  7576:     if (w->type != 8 || w->ndim != 2) ds4_die("expected a 2D Q8_0 tensor");
+  7577: 
+  7578:     const uint64_t in_dim = w->dim[0];
+  7579:     const uint64_t out_dim = w->dim[1];
+  7580:     if (row0 > out_dim || n_rows > out_dim - row0) ds4_die("Q8_0 row range is outside tensor");
+  7581:     const uint64_t ctx_blocks = (in_dim + 31) / 32;
+  7582: 
+  7583:     matvec_q8_0_ctx ctx = {
+  7584:         .out = out,
+  7585:         .data = tensor_data(m, w),
+  7586:         .xq = xq,
+  7587:         .xscale = xscale,
+  7588:         .in_dim = in_dim,
+  7589:         .row0 = row0,
+  7590:         .blocks = ctx_blocks,
+  7591:     };
+  7592:     ds4_parallel_for(n_rows, matvec_q8_0_worker, &ctx);
+  7593: }
+  7594: 
+  7595: static DS4_MAYBE_UNUSED void matvec_q8_0_prequant(
+  7596:         float           * out,
+  7597:         const ds4_model * m,
+  7598:         const ds4_tensor * w,
+  7599:         const int8_t    * xq,
+  7600:         const float     * xscale) {
+  7601:     matvec_q8_0_rows_prequant(out, m, w, xq, xscale, 0, w->dim[1]);
+  7602: }
+  7603: 
+  7604: static void matvec_q8_0_3d_slice_prequant(
+  7605:         float           * out,
+  7606:         const ds4_model * m,
+  7607:         const ds4_tensor * w,
+  7608:         const int8_t    * xq,
+  7609:         const float     * xscale,
+  7610:         uint64_t          slice) {
+  7611:     if (w->type != DS4_TENSOR_Q8_0 || w->ndim != 3) ds4_die("expected a 3D Q8_0 tensor");
+  7612:     if (slice >= w->dim[2]) ds4_die("Q8_0 slice is outside tensor");
+  7613: 
+  7614:     const uint64_t in_dim = w->dim[0];
+  7615:     const uint64_t out_dim = w->dim[1];
+  7616:     const uint64_t blocks = (in_dim + 31) / 32;
+  7617:     const uint64_t slice_bytes = out_dim * blocks * 34;
+  7618:     const uint8_t *data = (const uint8_t *)tensor_data(m, w) + slice * slice_bytes;
+  7619: 
+  7620:     matvec_q8_0_ctx ctx = {
+  7621:         .out = out,
+  7622:         .data = data,
+  7623:         .xq = xq,
+  7624:         .xscale = xscale,
+  7625:         .in_dim = in_dim,
+  7626:         .row0 = 0,
+  7627:         .blocks = blocks,
+  7628:     };
+  7629:     ds4_parallel_for(out_dim, matvec_q8_0_worker, &ctx);
+  7630: }
+  7631: 
+  7632: static DS4_MAYBE_UNUSED void matvec_q8_0_3d_slice(
+  7633:         float           * out,
+  7634:         const ds4_model * m,
+  7635:         const ds4_tensor * w,
+  7636:         const float     * x,
+  7637:         uint64_t          slice) {
+  7638:     if (w->type != DS4_TENSOR_Q8_0 || w->ndim != 3) ds4_die("expected a 3D Q8_0 tensor");
+  7639: 
+  7640:     const uint64_t in_dim = w->dim[0];
+  7641:     const uint64_t blocks = (in_dim + 31) / 32;
+  7642:     int8_t *xq = xmalloc((size_t)blocks * 32);
+  7643:     float *xscale = xmalloc((size_t)blocks * sizeof(xscale[0]));
+  7644: 
+  7645:     quantize_q8_0_activation(x, xq, xscale, in_dim);
+  7646:     matvec_q8_0_3d_slice_prequant(out, m, w, xq, xscale, slice);
+  7647: 
+  7648:     free(xscale);
+  7649:     free(xq);
+  7650: }
+  7651: 
+  7652: /* Compute two Q8_0 projections from the same input, used by gate/up and
+  7653:  * compressor kv/score pairs. */
+  7654: static void matvec_q8_0_pair_prequant(
+  7655:         float           * out0,
+  7656:         float           * out1,
+  7657:         const ds4_model * m,
+  7658:         const ds4_tensor * w0,
+  7659:         const ds4_tensor * w1,
+  7660:         const int8_t    * xq,
+  7661:         const float     * xscale) {
+  7662:     if (w0->type != 8 || w1->type != 8 || w0->ndim != 2 || w1->ndim != 2) {
+  7663:         ds4_die("expected two 2D Q8_0 tensors");
+  7664:     }
+  7665:     if (w0->dim[0] != w1->dim[0] || w0->dim[1] != w1->dim[1]) {
+  7666:         ds4_die("paired Q8_0 tensors do not have the same shape");
+  7667:     }
+  7668: 
+  7669:     const uint64_t in_dim = w0->dim[0];
+  7670:     matvec_q8_0_pair_ctx ctx = {
+  7671:         .out0 = out0,
+  7672:         .out1 = out1,
+  7673:         .data0 = tensor_data(m, w0),
+  7674:         .data1 = tensor_data(m, w1),
+  7675:         .xq = xq,
+  7676:         .xscale = xscale,
+  7677:         .in_dim = in_dim,
+  7678:         .blocks = (in_dim + 31) / 32,
+  7679:     };
+  7680:     ds4_parallel_for(w0->dim[1], matvec_q8_0_pair_worker, &ctx);
+  7681: }
+  7682: 
+  7683: static void matmul_q8_0_batch_prequant(
+  7684:         float           * out,
+  7685:         const ds4_model * m,
+  7686:         const ds4_tensor * w,
+  7687:         const int8_t    * xq,
+  7688:         const float     * xscale,
+  7689:         uint64_t          n_tok) {
+  7690:     if (w->type != 8 || w->ndim != 2) ds4_die("expected a 2D Q8_0 tensor");
+  7691: 
+  7692:     matmul_q8_0_batch_ctx ctx = {
+  7693:         .out = out,
+  7694:         .data = tensor_data(m, w),
+  7695:         .xq = xq,
+  7696:         .xscale = xscale,
+  7697:         .n_tok = n_tok,
+  7698:         .in_dim = w->dim[0],
+  7699:         .out_dim = w->dim[1],
+  7700:         .blocks = (w->dim[0] + 31) / 32,
+  7701:     };
+  7702:     ds4_parallel_for(ctx.out_dim, matmul_q8_0_batch_worker, &ctx);
+  7703: }
+  7704: 
+  7705: static void matmul_q8_0_pair_batch_prequant(
+  7706:         float           * out0,
+  7707:         float           * out1,
+  7708:         const ds4_model * m,
+  7709:         const ds4_tensor * w0,
+  7710:         const ds4_tensor * w1,
+  7711:         const int8_t    * xq,
+  7712:         const float     * xscale,
+  7713:         uint64_t          n_tok) {
+  7714:     if (w0->type != 8 || w1->type != 8 || w0->ndim != 2 || w1->ndim != 2) {
+  7715:         ds4_die("expected two 2D Q8_0 tensors");
+  7716:     }
+  7717:     if (w0->dim[0] != w1->dim[0] || w0->dim[1] != w1->dim[1]) {
+  7718:         ds4_die("paired Q8_0 tensors do not have the same shape");
+  7719:     }
+  7720: 
+  7721:     matmul_q8_0_pair_batch_ctx ctx = {
+  7722:         .out0 = out0,
+  7723:         .out1 = out1,
+  7724:         .data0 = tensor_data(m, w0),
+  7725:         .data1 = tensor_data(m, w1),
+  7726:         .xq = xq,
+  7727:         .xscale = xscale,
+  7728:         .n_tok = n_tok,
+  7729:         .in_dim = w0->dim[0],
+  7730:         .out_dim = w0->dim[1],
+  7731:         .blocks = (w0->dim[0] + 31) / 32,
+  7732:     };
+  7733:     ds4_parallel_for(ctx.out_dim, matmul_q8_0_pair_batch_worker, &ctx);
+  7734: }
+  7735: 
+  7736: /* Batched Q8_0 matmul for prefill: quantize all token activations, then scan
+  7737:  * weight rows once per output channel. */
+  7738: static void matmul_q8_0_batch(
+  7739:         float           * out,
+  7740:         const ds4_model * m,
+  7741:         const ds4_tensor * w,
+  7742:         const float     * x,
+  7743:         uint64_t          n_tok) {
+  7744:     if (w->type != 8 || w->ndim != 2) ds4_die("expected a 2D Q8_0 tensor");
+  7745: 
+  7746:     const uint64_t in_dim = w->dim[0];
+  7747:     const uint64_t blocks = (in_dim + 31) / 32;
+  7748:     int8_t *xq = xmalloc((size_t)n_tok * blocks * 32);
+  7749:     float *xscale = xmalloc((size_t)n_tok * blocks * sizeof(xscale[0]));
+  7750: 
+  7751:     quantize_q8_0_activation_batch(x, xq, xscale, n_tok, in_dim);
+  7752:     matmul_q8_0_batch_prequant(out, m, w, xq, xscale, n_tok);
+  7753: 
+  7754:     free(xscale);
+  7755:     free(xq);
+  7756: }
+  7757: 
+  7758: static void matmul_q8_0_pair_batch(
+  7759:         float           * out0,
+  7760:         float           * out1,
+  7761:         const ds4_model * m,
+  7762:         const ds4_tensor * w0,
+  7763:         const ds4_tensor * w1,
+
+==============================================================================================================
+SOURCE LINES 7845-7895
+==============================================================================================================
+  7845:                                            ctx->in_dim,
+  7846:                                            ctx->blocks);
+  7847:     }
+  7848: }
+  7849: 
+  7850: static void matvec_q8_0_f32_ref(
+  7851:         float            *out,
+  7852:         const ds4_model  *m,
+  7853:         const ds4_tensor *w,
+  7854:         const float      *x) {
+  7855:     if (w->type != DS4_TENSOR_Q8_0 || w->ndim < 2 || w->dim[0] == 0) {
+  7856:         ds4_die("expected a Q8_0 tensor with matrix rows");
+  7857:     }
+  7858:     matvec_q8_0_f32_ref_ctx ctx = {
+  7859:         .out = out,
+  7860:         .data = tensor_data(m, w),
+  7861:         .x = x,
+  7862:         .in_dim = w->dim[0],
+  7863:         .blocks = (w->dim[0] + 31) / 32,
+  7864:     };
+  7865:     ds4_parallel_for(w->elements / w->dim[0], matvec_q8_0_f32_ref_worker, &ctx);
+  7866: }
+  7867: 
+  7868: static void matvec_any(float *out, const ds4_model *m, const ds4_tensor *w, const float *x);
+  7869: static void matvec_q4_K_decode_scratch(
+  7870:         float                  *out,
+  7871:         const ds4_model        *m,
+  7872:         const ds4_tensor       *w,
+  7873:         const float            *x,
+  7874:         ds4_cpu_decode_scratch *scratch);
+  7875: 
+  7876: /* Decode scratch owns this temporary activation quantization so generation
+  7877:  * can assert that the hot path performs no malloc. */
+  7878: static void cpu_decode_quantize_q8_0(
+  7879:         ds4_cpu_decode_scratch * scratch,
+  7880:         const float            * x,
+  7881:         uint64_t                 in_dim) {
+  7882:     if (in_dim > scratch->q8_cap) ds4_die("CPU decode Q8_0 scratch buffer is too small");
+  7883:     quantize_q8_0_activation(x, scratch->q8_xq, scratch->q8_xscale, in_dim);
+  7884: }
+  7885: 
+  7886: static void matvec_q8_0_decode_scratch(
+  7887:         float                  * out,
+  7888:         const ds4_model        * m,
+  7889:         const ds4_tensor       * w,
+  7890:         const float            * x,
+  7891:         ds4_cpu_decode_scratch * scratch) {
+  7892:     cpu_decode_quantize_q8_0(scratch, x, w->dim[0]);
+  7893:     matvec_q8_0_prequant(out, m, w, scratch->q8_xq, scratch->q8_xscale);
+  7894: }
+  7895: 
+
+==============================================================================================================
+SOURCE LINES 7936-8119
+==============================================================================================================
+  7936:     const uint64_t blocks = (group_dim + 31) / 32;
+  7937:     int8_t *xq = xmalloc((size_t)n_groups * blocks * 32);
+  7938:     float *xscale = xmalloc((size_t)n_groups * blocks * sizeof(xscale[0]));
+  7939: 
+  7940:     for (uint32_t g = 0; g < n_groups; g++) {
+  7941:         quantize_q8_0_activation(x + (uint64_t)g * group_dim,
+  7942:                                  xq + (uint64_t)g * blocks * 32,
+  7943:                                  xscale + (uint64_t)g * blocks,
+  7944:                                  group_dim);
+  7945:     }
+  7946: 
+  7947:     matvec_q8_0_grouped_ctx ctx = {
+  7948:         .out = out,
+  7949:         .data = tensor_data(m, w),
+  7950:         .xq = xq,
+  7951:         .xscale = xscale,
+  7952:         .in_dim = group_dim,
+  7953:         .blocks = blocks,
+  7954:         .rank = rank,
+  7955:     };
+  7956:     ds4_parallel_for((uint64_t)n_groups * rank, matvec_q8_0_grouped_worker, &ctx);
+  7957: 
+  7958:     free(xscale);
+  7959:     free(xq);
+  7960: }
+  7961: 
+  7962: static void matvec_q8_0_grouped_rows_decode_scratch(
+  7963:         float                  * out,
+  7964:         const ds4_model        * m,
+  7965:         const ds4_tensor       * w,
+  7966:         const float            * x,
+  7967:         uint32_t                 n_groups,
+  7968:         uint64_t                 group_dim,
+  7969:         uint64_t                 rank,
+  7970:         ds4_cpu_decode_scratch * scratch) {
+  7971:     if (w->type != 8 || w->ndim != 2) ds4_die("expected a 2D Q8_0 tensor");
+  7972:     if (w->dim[0] != group_dim || w->dim[1] < (uint64_t)n_groups * rank) {
+  7973:         ds4_die("grouped Q8_0 tensor has an unexpected layout");
+  7974:     }
+  7975:     if ((uint64_t)n_groups * group_dim > scratch->q8_cap) {
+  7976:         ds4_die("CPU decode grouped Q8_0 scratch buffer is too small");
+  7977:     }
+  7978: 
+  7979:     const uint64_t blocks = (group_dim + 31) / 32;
+  7980:     for (uint32_t g = 0; g < n_groups; g++) {
+  7981:         quantize_q8_0_activation(x + (uint64_t)g * group_dim,
+  7982:                                  scratch->q8_xq + (uint64_t)g * blocks * 32,
+  7983:                                  scratch->q8_xscale + (uint64_t)g * blocks,
+  7984:                                  group_dim);
+  7985:     }
+  7986: 
+  7987:     matvec_q8_0_grouped_ctx ctx = {
+  7988:         .out = out,
+  7989:         .data = tensor_data(m, w),
+  7990:         .xq = scratch->q8_xq,
+  7991:         .xscale = scratch->q8_xscale,
+  7992:         .in_dim = group_dim,
+  7993:         .blocks = blocks,
+  7994:         .rank = rank,
+  7995:     };
+  7996:     ds4_parallel_for((uint64_t)n_groups * rank, matvec_q8_0_grouped_worker, &ctx);
+  7997: }
+  7998: 
+  7999: static void matmul_q8_0_grouped_batch(
+  8000:         float           * out,
+  8001:         const ds4_model * m,
+  8002:         const ds4_tensor * w,
+  8003:         const float     * x,
+  8004:         uint64_t          n_tok,
+  8005:         uint32_t          n_groups,
+  8006:         uint64_t          group_dim,
+  8007:         uint64_t          rank) {
+  8008:     if (w->type != 8 || w->ndim != 2) ds4_die("expected a 2D Q8_0 tensor");
+  8009:     if (w->dim[0] != group_dim || w->dim[1] < (uint64_t)n_groups * rank) {
+  8010:         ds4_die("grouped Q8_0 tensor has an unexpected layout");
+  8011:     }
+  8012: 
+  8013:     const uint64_t blocks = (group_dim + 31) / 32;
+  8014:     int8_t *xq = xmalloc((size_t)n_tok * n_groups * blocks * 32);
+  8015:     float *xscale = xmalloc((size_t)n_tok * n_groups * blocks * sizeof(xscale[0]));
+  8016: 
+  8017:     for (uint64_t t = 0; t < n_tok; t++) {
+  8018:         for (uint32_t g = 0; g < n_groups; g++) {
+  8019:             const uint64_t xbase = (t * n_groups + g) * blocks;
+  8020:             quantize_q8_0_activation(x + t * n_groups * group_dim + (uint64_t)g * group_dim,
+  8021:                                      xq + xbase * 32,
+  8022:                                      xscale + xbase,
+  8023:                                      group_dim);
+  8024:         }
+  8025:     }
+  8026: 
+  8027:     matmul_q8_0_grouped_batch_ctx ctx = {
+  8028:         .out = out,
+  8029:         .data = tensor_data(m, w),
+  8030:         .xq = xq,
+  8031:         .xscale = xscale,
+  8032:         .n_tok = n_tok,
+  8033:         .n_groups = n_groups,
+  8034:         .group_dim = group_dim,
+  8035:         .blocks = blocks,
+  8036:         .rank = rank,
+  8037:     };
+  8038:     ds4_parallel_for((uint64_t)n_groups * rank, matmul_q8_0_grouped_batch_worker, &ctx);
+  8039: 
+  8040:     free(xscale);
+  8041:     free(xq);
+  8042: }
+  8043: 
+  8044: /* =========================================================================
+  8045:  * Dense Q4_K matvec/matmul.
+  8046:  * =========================================================================
+  8047:  *
+  8048:  * The AProjQ4 GGUFs store the dense attention projections (q_a, q_b, kv,
+  8049:  * output_a, output_b) as Q4_K instead of Q8_0.  This family mirrors the
+  8050:  * Q8_0 dense functions above: the activation is quantized to Q8_K once and
+  8051:  * each Q4_K weight row is reduced with the shared ds4_vec_dot_q4_K_q8_K
+  8052:  * kernel, so the same call sites can dispatch on the tensor type.
+  8053:  */
+  8054: 
+  8055: typedef struct {
+  8056:     float *out;
+  8057:     const uint8_t *data;
+  8058:     const block_q8_K *xq;
+  8059:     uint64_t in_dim;
+  8060:     uint64_t row_bytes;
+  8061: } matvec_q4_K_dense_ctx;
+  8062: 
+  8063: static void matvec_q4_K_dense_worker(void *vctx, uint64_t row0, uint64_t row1) {
+  8064:     matvec_q4_K_dense_ctx *ctx = vctx;
+  8065:     for (uint64_t r = row0; r < row1; r++) {
+  8066:         const block_q4_K *row = (const block_q4_K *)(ctx->data + r * ctx->row_bytes);
+  8067:         ds4_vec_dot_q4_K_q8_K((int)ctx->in_dim, &ctx->out[r], row, ctx->xq);
+  8068:     }
+  8069: }
+  8070: 
+  8071: static void dense_q4_K_expect(const ds4_tensor *w, uint64_t in_dim) {
+  8072:     if (w->type != DS4_TENSOR_Q4_K || w->ndim != 2) ds4_die("expected a 2D Q4_K tensor");
+  8073:     if (w->dim[0] != in_dim) ds4_die("Q4_K dense tensor has an unexpected width");
+  8074:     if ((in_dim % QK_K) != 0) ds4_die("Q4_K dense row is not QK_K aligned");
+  8075: }
+  8076: 
+  8077: static void matvec_q4_K_prequant(
+  8078:         float            *out,
+  8079:         const ds4_model  *m,
+  8080:         const ds4_tensor *w,
+  8081:         const block_q8_K *xq) {
+  8082:     matvec_q4_K_dense_ctx ctx = {
+  8083:         .out = out,
+  8084:         .data = tensor_data(m, w),
+  8085:         .xq = xq,
+  8086:         .in_dim = w->dim[0],
+  8087:         .row_bytes = (w->dim[0] / QK_K) * sizeof(block_q4_K),
+  8088:     };
+  8089:     ds4_parallel_for(w->dim[1], matvec_q4_K_dense_worker, &ctx);
+  8090: }
+  8091: 
+  8092: static void matvec_q4_K(float *out, const ds4_model *m, const ds4_tensor *w, const float *x) {
+  8093:     dense_q4_K_expect(w, w->dim[0]);
+  8094:     const uint64_t blocks = w->dim[0] / QK_K;
+  8095:     block_q8_K *xq = xmalloc((size_t)blocks * sizeof(block_q8_K));
+  8096:     ds4_quantize_row_q8_K(x, xq, (int64_t)w->dim[0]);
+  8097:     matvec_q4_K_prequant(out, m, w, xq);
+  8098:     free(xq);
+  8099: }
+  8100: 
+  8101: static void matvec_q4_K_decode_scratch(
+  8102:         float                  *out,
+  8103:         const ds4_model        *m,
+  8104:         const ds4_tensor       *w,
+  8105:         const float            *x,
+  8106:         ds4_cpu_decode_scratch *scratch) {
+  8107:     dense_q4_K_expect(w, w->dim[0]);
+  8108:     if (w->dim[0] > scratch->q8_cap) ds4_die("CPU decode Q4_K scratch buffer is too small");
+  8109:     ds4_quantize_row_q8_K(x, scratch->dense_xq, (int64_t)w->dim[0]);
+  8110:     matvec_q4_K_prequant(out, m, w, scratch->dense_xq);
+  8111: }
+  8112: 
+  8113: typedef struct {
+  8114:     float *out;
+  8115:     const uint8_t *data;
+  8116:     const block_q8_K *xq;
+  8117:     uint64_t in_dim;
+  8118:     uint64_t blocks;
+  8119:     uint64_t rank;
+
+==============================================================================================================
+SOURCE LINES 8140-8190
+==============================================================================================================
+  8140:         ds4_die("grouped Q4_K tensor has an unexpected layout");
+  8141:     }
+  8142: }
+  8143: 
+  8144: static void matvec_q4_K_grouped_rows_prequant(
+  8145:         float            *out,
+  8146:         const ds4_model  *m,
+  8147:         const ds4_tensor *w,
+  8148:         const block_q8_K *xq,
+  8149:         uint32_t          n_groups,
+  8150:         uint64_t          group_dim,
+  8151:         uint64_t          rank) {
+  8152:     matvec_q4_K_grouped_ctx ctx = {
+  8153:         .out = out,
+  8154:         .data = tensor_data(m, w),
+  8155:         .xq = xq,
+  8156:         .in_dim = group_dim,
+  8157:         .blocks = group_dim / QK_K,
+  8158:         .rank = rank,
+  8159:     };
+  8160:     ds4_parallel_for((uint64_t)n_groups * rank, matvec_q4_K_grouped_worker, &ctx);
+  8161: }
+  8162: 
+  8163: static void matvec_q4_K_grouped_rows(
+  8164:         float            *out,
+  8165:         const ds4_model  *m,
+  8166:         const ds4_tensor *w,
+  8167:         const float      *x,
+  8168:         uint32_t          n_groups,
+  8169:         uint64_t          group_dim,
+  8170:         uint64_t          rank) {
+  8171:     matvec_q4_K_grouped_expect(w, n_groups, group_dim, rank);
+  8172:     const uint64_t blocks = group_dim / QK_K;
+  8173:     block_q8_K *xq = xmalloc((size_t)n_groups * blocks * sizeof(block_q8_K));
+  8174:     for (uint32_t g = 0; g < n_groups; g++) {
+  8175:         ds4_quantize_row_q8_K(x + (uint64_t)g * group_dim,
+  8176:                               xq + (uint64_t)g * blocks,
+  8177:                               (int64_t)group_dim);
+  8178:     }
+  8179:     matvec_q4_K_grouped_rows_prequant(out, m, w, xq, n_groups, group_dim, rank);
+  8180:     free(xq);
+  8181: }
+  8182: 
+  8183: static void matvec_q4_K_grouped_rows_decode_scratch(
+  8184:         float                  *out,
+  8185:         const ds4_model        *m,
+  8186:         const ds4_tensor       *w,
+  8187:         const float            *x,
+  8188:         uint32_t                n_groups,
+  8189:         uint64_t                group_dim,
+  8190:         uint64_t                rank,
+
+==============================================================================================================
+SOURCE LINES 8232-8282
+==============================================================================================================
+  8232:         const ds4_model  *m,
+  8233:         const ds4_tensor *w,
+  8234:         const float      *x,
+  8235:         uint64_t          n_tok) {
+  8236:     dense_q4_K_expect(w, w->dim[0]);
+  8237:     const uint64_t in_dim = w->dim[0];
+  8238:     const uint64_t blocks = in_dim / QK_K;
+  8239:     block_q8_K *xq = xmalloc((size_t)n_tok * blocks * sizeof(block_q8_K));
+  8240:     for (uint64_t t = 0; t < n_tok; t++) {
+  8241:         ds4_quantize_row_q8_K(x + t * in_dim, xq + t * blocks, (int64_t)in_dim);
+  8242:     }
+  8243:     matmul_q4_K_batch_ctx ctx = {
+  8244:         .out = out,
+  8245:         .data = tensor_data(m, w),
+  8246:         .xq = xq,
+  8247:         .n_tok = n_tok,
+  8248:         .in_dim = in_dim,
+  8249:         .out_dim = w->dim[1],
+  8250:         .blocks = blocks,
+  8251:     };
+  8252:     ds4_parallel_for(w->dim[1], matmul_q4_K_batch_worker, &ctx);
+  8253:     free(xq);
+  8254: }
+  8255: 
+  8256: typedef struct {
+  8257:     float *out;
+  8258:     const uint8_t *data;
+  8259:     const block_q8_K *xq;
+  8260:     uint64_t n_tok;
+  8261:     uint64_t n_groups;
+  8262:     uint64_t group_dim;
+  8263:     uint64_t blocks;
+  8264:     uint64_t rank;
+  8265: } matmul_q4_K_grouped_batch_ctx;
+  8266: 
+  8267: static void matmul_q4_K_grouped_batch_worker(void *vctx, uint64_t r0, uint64_t r1) {
+  8268:     matmul_q4_K_grouped_batch_ctx *ctx = vctx;
+  8269:     for (uint64_t idx = r0; idx < r1; idx++) {
+  8270:         const uint64_t group = idx / ctx->rank;
+  8271:         const block_q4_K *row = (const block_q4_K *)
+  8272:             (ctx->data + idx * ctx->blocks * sizeof(block_q4_K));
+  8273:         for (uint64_t t = 0; t < ctx->n_tok; t++) {
+  8274:             ds4_vec_dot_q4_K_q8_K((int)ctx->group_dim,
+  8275:                                   &ctx->out[t * ctx->n_groups * ctx->rank + idx],
+  8276:                                   row,
+  8277:                                   ctx->xq + (t * ctx->n_groups + group) * ctx->blocks);
+  8278:         }
+  8279:     }
+  8280: }
+  8281: 
+  8282: static void matmul_q4_K_grouped_batch(
+
+==============================================================================================================
+SOURCE LINES 8291-8341
+==============================================================================================================
+  8291:     matvec_q4_K_grouped_expect(w, n_groups, group_dim, rank);
+  8292:     const uint64_t blocks = group_dim / QK_K;
+  8293:     block_q8_K *xq = xmalloc((size_t)n_tok * n_groups * blocks * sizeof(block_q8_K));
+  8294:     for (uint64_t t = 0; t < n_tok; t++) {
+  8295:         for (uint32_t g = 0; g < n_groups; g++) {
+  8296:             ds4_quantize_row_q8_K(x + (t * n_groups + g) * group_dim,
+  8297:                                   xq + (t * n_groups + g) * blocks,
+  8298:                                   (int64_t)group_dim);
+  8299:         }
+  8300:     }
+  8301:     matmul_q4_K_grouped_batch_ctx ctx = {
+  8302:         .out = out,
+  8303:         .data = tensor_data(m, w),
+  8304:         .xq = xq,
+  8305:         .n_tok = n_tok,
+  8306:         .n_groups = n_groups,
+  8307:         .group_dim = group_dim,
+  8308:         .blocks = blocks,
+  8309:         .rank = rank,
+  8310:     };
+  8311:     ds4_parallel_for((uint64_t)n_groups * rank, matmul_q4_K_grouped_batch_worker, &ctx);
+  8312:     free(xq);
+  8313: }
+  8314: 
+  8315: /* Type dispatch for the dense attention projections: the AProjQ8 GGUFs keep
+  8316:  * them Q8_0, the AProjQ4 ones use Q4_K.  Q8_0 stays on the exact functions
+  8317:  * it always used so existing models remain bit-identical. */
+  8318: 
+  8319: static void matvec_dense_grouped_rows(
+  8320:         float            *out,
+  8321:         const ds4_model  *m,
+  8322:         const ds4_tensor *w,
+  8323:         const float      *x,
+  8324:         uint32_t          n_groups,
+  8325:         uint64_t          group_dim,
+  8326:         uint64_t          rank) {
+  8327:     if (w->type == DS4_TENSOR_Q4_K) {
+  8328:         matvec_q4_K_grouped_rows(out, m, w, x, n_groups, group_dim, rank);
+  8329:     } else {
+  8330:         matvec_q8_0_grouped_rows(out, m, w, x, n_groups, group_dim, rank);
+  8331:     }
+  8332: }
+  8333: 
+  8334: static void matvec_dense_grouped_rows_decode_scratch(
+  8335:         float                  *out,
+  8336:         const ds4_model        *m,
+  8337:         const ds4_tensor       *w,
+  8338:         const float            *x,
+  8339:         uint32_t                n_groups,
+  8340:         uint64_t                group_dim,
+  8341:         uint64_t                rank,
+
+==============================================================================================================
+SOURCE LINES 8390-8440
+==============================================================================================================
+  8390: 
+  8391:     for (uint64_t o = row0; o < row1; o++) {
+  8392:         double acc = 0.0;
+  8393:         const float *row = ctx->data + o * ctx->in_dim;
+  8394:         for (uint64_t i = 0; i < ctx->in_dim; i++) {
+  8395:             acc += (double)row[i] * ctx->x[i];
+  8396:         }
+  8397:         ctx->out[o] = (float)acc;
+  8398:     }
+  8399: }
+  8400: 
+  8401: static void matvec_f32(float *out, const ds4_model *m, const ds4_tensor *w, const float *x) {
+  8402:     if (w->type != 0 || w->ndim != 2) ds4_die("expected a 2D F32 tensor");
+  8403: 
+  8404:     matvec_f32_ctx ctx = {
+  8405:         .out = out,
+  8406:         .data = tensor_data(m, w),
+  8407:         .x = x,
+  8408:         .in_dim = w->dim[0],
+  8409:     };
+  8410:     ds4_parallel_for(w->dim[1], matvec_f32_worker, &ctx);
+  8411: }
+  8412: 
+  8413: /* Dispatch for dense F32/F16/Q8_0/Q4_K tensors used by the attention and
+  8414:  * auxiliary projections. */
+  8415: static void matvec_any(float *out, const ds4_model *m, const ds4_tensor *w, const float *x) {
+  8416:     switch (w->type) {
+  8417:     case 0: matvec_f32(out, m, w, x); break;
+  8418:     case 1: matvec_f16(out, m, w, x); break;
+  8419:     case 8: matvec_q8_0(out, m, w, x); break;
+  8420:     case DS4_TENSOR_Q4_K: matvec_q4_K(out, m, w, x); break;
+  8421:     default:
+  8422:         ds4_die("unsupported tensor type for dense matvec");
+  8423:     }
+  8424: }
+  8425: 
+  8426: static float tensor_1d_value(const ds4_model *m, const ds4_tensor *t, uint64_t i) {
+  8427:     if (i >= t->elements) ds4_die("tensor scalar index is out of bounds");
+  8428:     if (t->type == 0) {
+  8429:         const float *p = tensor_data(m, t);
+  8430:         return p[i];
+  8431:     }
+  8432:     if (t->type == 1) {
+  8433:         const uint16_t *p = tensor_data(m, t);
+  8434:         return f16_to_f32(p[i]);
+  8435:     }
+  8436:     ds4_die("unsupported tensor scalar type");
+  8437:     return 0.0f;
+  8438: }
+  8439: 
+  8440: static float tensor_2d_value(const ds4_model *m, const ds4_tensor *t, uint64_t x, uint64_t y) {
+
+==============================================================================================================
+SOURCE LINES 8537-8587
+==============================================================================================================
+  8537:         uint32_t          expert) {
+  8538:     if (w0->type != 16 || w1->type != 16) ds4_die("expected IQ2_XXS expert tensors");
+  8539: 
+  8540:     uint64_t in_dim0, out_dim0, row_bytes0;
+  8541:     uint64_t in_dim1, out_dim1, row_bytes1;
+  8542:     const uint8_t *base0 = tensor_expert_bytes(m, w0, expert, &in_dim0, &out_dim0, &row_bytes0);
+  8543:     const uint8_t *base1 = tensor_expert_bytes(m, w1, expert, &in_dim1, &out_dim1, &row_bytes1);
+  8544:     if (in_dim0 != in_dim1 || out_dim0 != out_dim1) ds4_die("paired IQ2_XXS expert tensors do not match");
+  8545:     if (in_dim0 % QK_K != 0) ds4_die("IQ2_XXS expert row is not QK_K aligned");
+  8546: 
+  8547:     matvec_iq2_xxs_pair_ctx ctx = {
+  8548:         .out0 = out0,
+  8549:         .out1 = out1,
+  8550:         .base0 = base0,
+  8551:         .base1 = base1,
+  8552:         .xq = xq,
+  8553:         .in_dim = in_dim0,
+  8554:         .row_bytes0 = row_bytes0,
+  8555:         .row_bytes1 = row_bytes1,
+  8556:     };
+  8557:     ds4_parallel_for(out_dim0, matvec_iq2_xxs_pair_worker, &ctx);
+  8558: }
+  8559: 
+  8560: static float silu(float x);
+  8561: 
+  8562: typedef struct {
+  8563:     float *mid;
+  8564:     const uint8_t *gate_base[DS4_MAX_EXPERT_USED];
+  8565:     const uint8_t *up_base[DS4_MAX_EXPERT_USED];
+  8566:     const block_q8_K *xq;
+  8567:     float expert_weight[DS4_MAX_EXPERT_USED];
+  8568:     float clamp;
+  8569:     uint64_t in_dim;
+  8570:     uint64_t out_dim;
+  8571:     uint64_t gate_row_bytes[DS4_MAX_EXPERT_USED];
+  8572:     uint64_t up_row_bytes[DS4_MAX_EXPERT_USED];
+  8573:     int n_expert;
+  8574: } matvec_iq2_xxs_mid_ctx;
+  8575: 
+  8576: typedef struct {
+  8577:     float *mid;
+  8578:     const uint8_t *gate_base[DS4_MAX_EXPERT_USED];
+  8579:     const uint8_t *up_base[DS4_MAX_EXPERT_USED];
+  8580:     const int8_t *xq;
+  8581:     const float *xscale;
+  8582:     float expert_weight[DS4_MAX_EXPERT_USED];
+  8583:     float clamp;
+  8584:     uint64_t in_dim;
+  8585:     uint64_t out_dim;
+  8586:     uint64_t blocks;
+  8587:     uint64_t gate_row_bytes[DS4_MAX_EXPERT_USED];
+
+==============================================================================================================
+SOURCE LINES 8699-8749
+==============================================================================================================
+  8699:         uint64_t up_in_dim, up_out_dim;
+  8700:         ctx.gate_base[i] = tensor_expert_bytes(m, gate_w, (uint32_t)selected[i],
+  8701:                                                &gate_in_dim, &gate_out_dim, &ctx.gate_row_bytes[i]);
+  8702:         ctx.up_base[i] = tensor_expert_bytes(m, up_w, (uint32_t)selected[i],
+  8703:                                              &up_in_dim, &up_out_dim, &ctx.up_row_bytes[i]);
+  8704:         if (gate_in_dim != up_in_dim || gate_out_dim != up_out_dim) {
+  8705:             ds4_die("paired IQ2_XXS expert tensors do not match");
+  8706:         }
+  8707:         if (i == 0) {
+  8708:             in_dim0 = gate_in_dim;
+  8709:             out_dim0 = gate_out_dim;
+  8710:         } else if (gate_in_dim != in_dim0 || gate_out_dim != out_dim0) {
+  8711:             ds4_die("IQ2_XXS expert tensors do not share a layout");
+  8712:         }
+  8713:         ctx.expert_weight[i] = expert_weight[i];
+  8714:     }
+  8715:     if (in_dim0 % QK_K != 0) ds4_die("IQ2_XXS expert row is not QK_K aligned");
+  8716: 
+  8717:     ctx.in_dim = in_dim0;
+  8718:     ctx.out_dim = out_dim0;
+  8719:     ds4_parallel_for((uint64_t)n_expert * out_dim0, matvec_iq2_xxs_mid_worker, &ctx);
+  8720: }
+  8721: 
+  8722: static DS4_MAYBE_UNUSED void matvec_q8_0_experts_mid_prequant(
+  8723:         float            *mid,
+  8724:         const ds4_model  *m,
+  8725:         const ds4_tensor *gate_w,
+  8726:         const ds4_tensor *up_w,
+  8727:         const int8_t     *xq,
+  8728:         const float      *xscale,
+  8729:         const int        *selected,
+  8730:         const float      *expert_weight,
+  8731:         int               n_expert,
+  8732:         float             clamp) {
+  8733:     if (gate_w->type != DS4_TENSOR_Q8_0 || up_w->type != DS4_TENSOR_Q8_0) {
+  8734:         ds4_die("expected Q8_0 expert tensors");
+  8735:     }
+  8736:     if (n_expert < 1 || (uint32_t)n_expert > DS4_N_EXPERT_USED) ds4_die("unexpected routed expert count");
+  8737: 
+  8738:     uint64_t in_dim0 = 0;
+  8739:     uint64_t out_dim0 = 0;
+  8740:     matvec_q8_0_mid_ctx ctx = {
+  8741:         .mid = mid,
+  8742:         .xq = xq,
+  8743:         .xscale = xscale,
+  8744:         .clamp = clamp,
+  8745:         .n_expert = n_expert,
+  8746:     };
+  8747: 
+  8748:     for (int i = 0; i < n_expert; i++) {
+  8749:         uint64_t gate_in_dim, gate_out_dim;
+
+==============================================================================================================
+SOURCE LINES 8751-8892
+==============================================================================================================
+  8751:         ctx.gate_base[i] = tensor_expert_bytes(m, gate_w, (uint32_t)selected[i],
+  8752:                                                &gate_in_dim, &gate_out_dim, &ctx.gate_row_bytes[i]);
+  8753:         ctx.up_base[i] = tensor_expert_bytes(m, up_w, (uint32_t)selected[i],
+  8754:                                              &up_in_dim, &up_out_dim, &ctx.up_row_bytes[i]);
+  8755:         if (gate_in_dim != up_in_dim || gate_out_dim != up_out_dim) {
+  8756:             ds4_die("paired Q8_0 expert tensors do not match");
+  8757:         }
+  8758:         if (i == 0) {
+  8759:             in_dim0 = gate_in_dim;
+  8760:             out_dim0 = gate_out_dim;
+  8761:         } else if (gate_in_dim != in_dim0 || gate_out_dim != out_dim0) {
+  8762:             ds4_die("Q8_0 expert tensors do not share a layout");
+  8763:         }
+  8764:         ctx.expert_weight[i] = expert_weight[i];
+  8765:     }
+  8766:     if ((in_dim0 % 32u) != 0) ds4_die("Q8_0 expert row is not QK8_0 aligned");
+  8767: 
+  8768:     ctx.in_dim = in_dim0;
+  8769:     ctx.out_dim = out_dim0;
+  8770:     ctx.blocks = in_dim0 / 32u;
+  8771:     ds4_parallel_for((uint64_t)n_expert * out_dim0, matvec_q8_0_mid_worker, &ctx);
+  8772: }
+  8773: 
+  8774: static DS4_MAYBE_UNUSED void matvec_q8_k_experts_mid_prequant(
+  8775:         float            *mid,
+  8776:         const ds4_model  *m,
+  8777:         const ds4_tensor *gate_w,
+  8778:         const ds4_tensor *up_w,
+  8779:         const block_q8_K *xq,
+  8780:         const int        *selected,
+  8781:         const float      *expert_weight,
+  8782:         int               n_expert,
+  8783:         float             clamp) {
+  8784:     if (gate_w->type != DS4_TENSOR_Q8_K || up_w->type != DS4_TENSOR_Q8_K) {
+  8785:         ds4_die("expected Q8_K expert tensors");
+  8786:     }
+  8787:     if (n_expert < 1 || (uint32_t)n_expert > DS4_N_EXPERT_USED) ds4_die("unexpected routed expert count");
+  8788: 
+  8789:     uint64_t in_dim0 = 0;
+  8790:     uint64_t out_dim0 = 0;
+  8791:     matvec_q8_k_mid_ctx ctx = {
+  8792:         .mid = mid,
+  8793:         .xq = xq,
+  8794:         .clamp = clamp,
+  8795:         .n_expert = n_expert,
+  8796:     };
+  8797: 
+  8798:     for (int i = 0; i < n_expert; i++) {
+  8799:         uint64_t gate_in_dim, gate_out_dim;
+  8800:         uint64_t up_in_dim, up_out_dim;
+  8801:         ctx.gate_base[i] = tensor_expert_bytes(m, gate_w, (uint32_t)selected[i],
+  8802:                                                &gate_in_dim, &gate_out_dim, &ctx.gate_row_bytes[i]);
+  8803:         ctx.up_base[i] = tensor_expert_bytes(m, up_w, (uint32_t)selected[i],
+  8804:                                              &up_in_dim, &up_out_dim, &ctx.up_row_bytes[i]);
+  8805:         if (gate_in_dim != up_in_dim || gate_out_dim != up_out_dim) {
+  8806:             ds4_die("paired Q8_K expert tensors do not match");
+  8807:         }
+  8808:         if (i == 0) {
+  8809:             in_dim0 = gate_in_dim;
+  8810:             out_dim0 = gate_out_dim;
+  8811:         } else if (gate_in_dim != in_dim0 || gate_out_dim != out_dim0) {
+  8812:             ds4_die("Q8_K expert tensors do not share a layout");
+  8813:         }
+  8814:         ctx.expert_weight[i] = expert_weight[i];
+  8815:     }
+  8816:     if (in_dim0 % QK_K != 0) ds4_die("Q8_K expert row is not QK_K aligned");
+  8817: 
+  8818:     ctx.in_dim = in_dim0;
+  8819:     ctx.out_dim = out_dim0;
+  8820:     ds4_parallel_for((uint64_t)n_expert * out_dim0, matvec_q8_k_mid_worker, &ctx);
+  8821: }
+  8822: 
+  8823: typedef struct {
+  8824:     float *out;
+  8825:     const uint8_t *base;
+  8826:     const block_q8_K *xq;
+  8827:     uint64_t in_dim;
+  8828:     uint64_t row_bytes;
+  8829: } matvec_q2_k_ctx;
+  8830: 
+  8831: static void matvec_q2_k_worker(void *vctx, uint64_t row0, uint64_t row1) {
+  8832:     matvec_q2_k_ctx *ctx = vctx;
+  8833:     for (uint64_t row = row0; row < row1; row++) {
+  8834:         const block_q2_K *br = (const block_q2_K *)(ctx->base + row * ctx->row_bytes);
+  8835:         ds4_vec_dot_q2_K_q8_K((int)ctx->in_dim, &ctx->out[row], br, ctx->xq);
+  8836:     }
+  8837: }
+  8838: 
+  8839: /* Single expert Q2_K down projection, kept mostly for tracing and diagnostics. */
+  8840: static void matvec_q2_k_expert(
+  8841:         float            *out,
+  8842:         const ds4_model  *m,
+  8843:         const ds4_tensor *w,
+  8844:         const float      *x,
+  8845:         uint32_t          expert) {
+  8846:     if (w->type != 10) ds4_die("expected a Q2_K expert tensor");
+  8847: 
+  8848:     uint64_t in_dim, out_dim, row_bytes;
+  8849:     const uint8_t *base = tensor_expert_bytes(m, w, expert, &in_dim, &out_dim, &row_bytes);
+  8850:     if (in_dim % QK_K != 0) ds4_die("Q2_K expert row is not QK_K aligned");
+  8851: 
+  8852:     block_q8_K *xq = xmalloc((size_t)(in_dim / QK_K) * sizeof(xq[0]));
+  8853:     ds4_quantize_row_q8_K(x, xq, (int64_t)in_dim);
+  8854: 
+  8855:     matvec_q2_k_ctx ctx = {
+  8856:         .out = out,
+  8857:         .base = base,
+  8858:         .xq = xq,
+  8859:         .in_dim = in_dim,
+  8860:         .row_bytes = row_bytes,
+  8861:     };
+  8862:     ds4_parallel_for(out_dim, matvec_q2_k_worker, &ctx);
+  8863: 
+  8864:     free(xq);
+  8865: }
+  8866: 
+  8867: typedef struct {
+  8868:     float *out;
+  8869:     const uint8_t *base[DS4_MAX_EXPERT_USED];
+  8870:     const block_q8_K *xq[DS4_MAX_EXPERT_USED];
+  8871:     uint64_t in_dim;
+  8872:     uint64_t row_bytes[DS4_MAX_EXPERT_USED];
+  8873:     int n_expert;
+  8874: } matvec_q2_k_accum_ctx;
+  8875: 
+  8876: static void matvec_q2_k_accum_worker(void *vctx, uint64_t row0, uint64_t row1) {
+  8877:     matvec_q2_k_accum_ctx *ctx = vctx;
+  8878: 
+  8879:     for (uint64_t row = row0; row < row1; row++) {
+  8880:         float acc = 0.0f;
+  8881:         for (int i = 0; i < ctx->n_expert; i++) {
+  8882:             float v = 0.0f;
+  8883:             const block_q2_K *br = (const block_q2_K *)(ctx->base[i] + row * ctx->row_bytes[i]);
+  8884:             ds4_vec_dot_q2_K_q8_K((int)ctx->in_dim, &v, br, ctx->xq[i]);
+  8885:             acc += v;
+  8886:         }
+  8887:         ctx->out[row] = acc;
+  8888:     }
+  8889: }
+  8890: 
+  8891: /* Accumulate all selected experts' Q2_K down projections directly into the
+  8892:  * 4096-wide MoE output. */
+
+==============================================================================================================
+SOURCE LINES 8912-8962
+==============================================================================================================
+  8912:             in_dim0 = in_dim;
+  8913:             out_dim0 = out_dim;
+  8914:         } else if (in_dim != in_dim0 || out_dim != out_dim0) {
+  8915:             ds4_die("Q2_K expert tensors do not share a layout");
+  8916:         }
+  8917:     }
+  8918:     if (in_dim0 % QK_K != 0) ds4_die("Q2_K expert row is not QK_K aligned");
+  8919: 
+  8920:     const uint64_t n_blocks = in_dim0 / QK_K;
+  8921:     matvec_q2_k_accum_ctx ctx = {
+  8922:         .out = out,
+  8923:         .in_dim = in_dim0,
+  8924:         .n_expert = n_expert,
+  8925:     };
+  8926:     for (int i = 0; i < n_expert; i++) {
+  8927:         ctx.base[i] = base[i];
+  8928:         ctx.row_bytes[i] = row_bytes[i];
+  8929:         ctx.xq[i] = xq + (uint64_t)i * n_blocks;
+  8930:     }
+  8931: 
+  8932:     ds4_parallel_for(out_dim0, matvec_q2_k_accum_worker, &ctx);
+  8933: }
+  8934: 
+  8935: typedef struct {
+  8936:     float *mid;
+  8937:     const uint8_t *gate_base[DS4_MAX_EXPERT_USED];
+  8938:     const uint8_t *up_base[DS4_MAX_EXPERT_USED];
+  8939:     const block_q8_K *xq;
+  8940:     float expert_weight[DS4_MAX_EXPERT_USED];
+  8941:     float clamp;
+  8942:     uint64_t in_dim;
+  8943:     uint64_t out_dim;
+  8944:     uint64_t gate_row_bytes[DS4_MAX_EXPERT_USED];
+  8945:     uint64_t up_row_bytes[DS4_MAX_EXPERT_USED];
+  8946:     int n_expert;
+  8947: } matvec_q2_k_mid_ctx;
+  8948: 
+  8949: static void matvec_q2_k_mid_worker(void *vctx, uint64_t row0, uint64_t row1) {
+  8950:     matvec_q2_k_mid_ctx *ctx = vctx;
+  8951: 
+  8952:     for (uint64_t idx = row0; idx < row1; idx++) {
+  8953:         const int slot = (int)(idx / ctx->out_dim);
+  8954:         const uint64_t row = idx - (uint64_t)slot * ctx->out_dim;
+  8955:         float gate = 0.0f;
+  8956:         float up = 0.0f;
+  8957: 
+  8958:         const block_q2_K *gate_row = (const block_q2_K *)(ctx->gate_base[slot] + row * ctx->gate_row_bytes[slot]);
+  8959:         ds4_vec_dot_q2_K_q8_K((int)ctx->in_dim, &gate, gate_row, ctx->xq);
+  8960: 
+  8961:         const block_q2_K *up_row = (const block_q2_K *)(ctx->up_base[slot] + row * ctx->up_row_bytes[slot]);
+  8962:         ds4_vec_dot_q2_K_q8_K((int)ctx->in_dim, &up, up_row, ctx->xq);
+
+==============================================================================================================
+SOURCE LINES 8999-9049
+==============================================================================================================
+  8999:         uint64_t up_in_dim, up_out_dim;
+  9000:         ctx.gate_base[i] = tensor_expert_bytes(m, gate_w, (uint32_t)selected[i],
+  9001:                                                &gate_in_dim, &gate_out_dim, &ctx.gate_row_bytes[i]);
+  9002:         ctx.up_base[i] = tensor_expert_bytes(m, up_w, (uint32_t)selected[i],
+  9003:                                              &up_in_dim, &up_out_dim, &ctx.up_row_bytes[i]);
+  9004:         if (gate_in_dim != up_in_dim || gate_out_dim != up_out_dim) {
+  9005:             ds4_die("paired Q2_K expert tensors do not match");
+  9006:         }
+  9007:         if (i == 0) {
+  9008:             in_dim0 = gate_in_dim;
+  9009:             out_dim0 = gate_out_dim;
+  9010:         } else if (gate_in_dim != in_dim0 || gate_out_dim != out_dim0) {
+  9011:             ds4_die("Q2_K expert tensors do not share a layout");
+  9012:         }
+  9013:         ctx.expert_weight[i] = expert_weight[i];
+  9014:     }
+  9015:     if (in_dim0 % QK_K != 0) ds4_die("Q2_K expert row is not QK_K aligned");
+  9016: 
+  9017:     ctx.in_dim = in_dim0;
+  9018:     ctx.out_dim = out_dim0;
+  9019:     ds4_parallel_for((uint64_t)n_expert * out_dim0, matvec_q2_k_mid_worker, &ctx);
+  9020: }
+  9021: 
+  9022: typedef struct {
+  9023:     float *out;
+  9024:     const uint8_t *base[DS4_MAX_EXPERT_USED];
+  9025:     const int8_t *xq[DS4_MAX_EXPERT_USED];
+  9026:     const float *xscale[DS4_MAX_EXPERT_USED];
+  9027:     uint64_t in_dim;
+  9028:     uint64_t row_bytes[DS4_MAX_EXPERT_USED];
+  9029:     uint64_t blocks;
+  9030:     int n_expert;
+  9031: } matvec_q8_0_accum_ctx;
+  9032: 
+  9033: static void matvec_q8_0_accum_worker(void *vctx, uint64_t row0, uint64_t row1) {
+  9034:     matvec_q8_0_accum_ctx *ctx = vctx;
+  9035: 
+  9036:     for (uint64_t row = row0; row < row1; row++) {
+  9037:         float acc = 0.0f;
+  9038:         for (int i = 0; i < ctx->n_expert; i++) {
+  9039:             const uint8_t *br = ctx->base[i] + row * ctx->row_bytes[i];
+  9040:             acc += dot_q8_0_row(br, ctx->xq[i], ctx->xscale[i],
+  9041:                                 ctx->in_dim, ctx->blocks);
+  9042:         }
+  9043:         ctx->out[row] = acc;
+  9044:     }
+  9045: }
+  9046: 
+  9047: static void matvec_q8_0_experts_accum_prequant(
+  9048:         float            *out,
+  9049:         const ds4_model  *m,
+
+==============================================================================================================
+SOURCE LINES 9066-9116
+==============================================================================================================
+  9066:         uint64_t in_dim, out_dim;
+  9067:         ctx.base[i] = tensor_expert_bytes(m, w, (uint32_t)selected[i],
+  9068:                                           &in_dim, &out_dim, &ctx.row_bytes[i]);
+  9069:         if (i == 0) {
+  9070:             in_dim0 = in_dim;
+  9071:             out_dim0 = out_dim;
+  9072:         } else if (in_dim != in_dim0 || out_dim != out_dim0) {
+  9073:             ds4_die("Q8_0 expert tensors do not share a layout");
+  9074:         }
+  9075:     }
+  9076:     if ((in_dim0 % 32u) != 0) ds4_die("Q8_0 expert row is not QK8_0 aligned");
+  9077: 
+  9078:     const uint64_t blocks0 = in_dim0 / 32u;
+  9079:     ctx.in_dim = in_dim0;
+  9080:     ctx.blocks = blocks0;
+  9081:     for (int i = 0; i < n_expert; i++) {
+  9082:         ctx.xq[i] = xq + (uint64_t)i * blocks0 * 32u;
+  9083:         ctx.xscale[i] = xscale + (uint64_t)i * blocks0;
+  9084:     }
+  9085: 
+  9086:     ds4_parallel_for(out_dim0, matvec_q8_0_accum_worker, &ctx);
+  9087: }
+  9088: 
+  9089: typedef struct {
+  9090:     float *out;
+  9091:     const uint8_t *base[DS4_MAX_EXPERT_USED];
+  9092:     const block_q8_K *xq[DS4_MAX_EXPERT_USED];
+  9093:     uint64_t in_dim;
+  9094:     uint64_t row_bytes[DS4_MAX_EXPERT_USED];
+  9095:     int n_expert;
+  9096: } matvec_q8_k_accum_ctx;
+  9097: 
+  9098: static void matvec_q8_k_accum_worker(void *vctx, uint64_t row0, uint64_t row1) {
+  9099:     matvec_q8_k_accum_ctx *ctx = vctx;
+  9100: 
+  9101:     for (uint64_t row = row0; row < row1; row++) {
+  9102:         float acc = 0.0f;
+  9103:         for (int i = 0; i < ctx->n_expert; i++) {
+  9104:             float v = 0.0f;
+  9105:             const block_q8_K *br = (const block_q8_K *)(ctx->base[i] + row * ctx->row_bytes[i]);
+  9106:             ds4_vec_dot_q8_K_q8_K((int)ctx->in_dim, &v, br, ctx->xq[i]);
+  9107:             acc += v;
+  9108:         }
+  9109:         ctx->out[row] = acc;
+  9110:     }
+  9111: }
+  9112: 
+  9113: static void matvec_q8_k_experts_accum_prequant(
+  9114:         float            *out,
+  9115:         const ds4_model  *m,
+  9116:         const ds4_tensor *w,
+
+==============================================================================================================
+SOURCE LINES 9129-9179
+==============================================================================================================
+  9129: 
+  9130:     for (int i = 0; i < n_expert; i++) {
+  9131:         uint64_t in_dim, out_dim;
+  9132:         ctx.base[i] = tensor_expert_bytes(m, w, (uint32_t)selected[i],
+  9133:                                           &in_dim, &out_dim, &ctx.row_bytes[i]);
+  9134:         if (i == 0) {
+  9135:             in_dim0 = in_dim;
+  9136:             out_dim0 = out_dim;
+  9137:         } else if (in_dim != in_dim0 || out_dim != out_dim0) {
+  9138:             ds4_die("Q8_K expert tensors do not share a layout");
+  9139:         }
+  9140:     }
+  9141:     if (in_dim0 % QK_K != 0) ds4_die("Q8_K expert row is not QK_K aligned");
+  9142: 
+  9143:     const uint64_t n_blocks = in_dim0 / QK_K;
+  9144:     ctx.in_dim = in_dim0;
+  9145:     for (int i = 0; i < n_expert; i++) {
+  9146:         ctx.xq[i] = xq + (uint64_t)i * n_blocks;
+  9147:     }
+  9148: 
+  9149:     ds4_parallel_for(out_dim0, matvec_q8_k_accum_worker, &ctx);
+  9150: }
+  9151: 
+  9152: typedef struct {
+  9153:     float *out;
+  9154:     const uint8_t *base[DS4_MAX_EXPERT_USED];
+  9155:     const block_q8_K *xq[DS4_MAX_EXPERT_USED];
+  9156:     uint64_t in_dim;
+  9157:     uint64_t row_bytes[DS4_MAX_EXPERT_USED];
+  9158:     int n_expert;
+  9159: } matvec_iq2_xxs_accum_ctx;
+  9160: 
+  9161: static void matvec_iq2_xxs_accum_worker(void *vctx, uint64_t row0, uint64_t row1) {
+  9162:     matvec_iq2_xxs_accum_ctx *ctx = vctx;
+  9163: 
+  9164:     for (uint64_t row = row0; row < row1; row++) {
+  9165:         float acc = 0.0f;
+  9166:         for (int i = 0; i < ctx->n_expert; i++) {
+  9167:             float v = 0.0f;
+  9168:             const block_iq2_xxs *br = (const block_iq2_xxs *)(ctx->base[i] + row * ctx->row_bytes[i]);
+  9169:             ds4_vec_dot_iq2_xxs_q8_K((int)ctx->in_dim, &v, br, ctx->xq[i]);
+  9170:             acc += v;
+  9171:         }
+  9172:         ctx->out[row] = acc;
+  9173:     }
+  9174: }
+  9175: 
+  9176: static void matvec_iq2_xxs_experts_accum_prequant(
+  9177:         float            *out,
+  9178:         const ds4_model  *m,
+  9179:         const ds4_tensor *w,
+
+==============================================================================================================
+SOURCE LINES 9195-9245
+==============================================================================================================
+  9195:             in_dim0 = in_dim;
+  9196:             out_dim0 = out_dim;
+  9197:         } else if (in_dim != in_dim0 || out_dim != out_dim0) {
+  9198:             ds4_die("IQ2_XXS expert tensors do not share a layout");
+  9199:         }
+  9200:     }
+  9201:     if (in_dim0 % QK_K != 0) ds4_die("IQ2_XXS expert row is not QK_K aligned");
+  9202: 
+  9203:     const uint64_t n_blocks = in_dim0 / QK_K;
+  9204:     matvec_iq2_xxs_accum_ctx ctx = {
+  9205:         .out = out,
+  9206:         .in_dim = in_dim0,
+  9207:         .n_expert = n_expert,
+  9208:     };
+  9209:     for (int i = 0; i < n_expert; i++) {
+  9210:         ctx.base[i] = base[i];
+  9211:         ctx.row_bytes[i] = row_bytes[i];
+  9212:         ctx.xq[i] = xq + (uint64_t)i * n_blocks;
+  9213:     }
+  9214: 
+  9215:     ds4_parallel_for(out_dim0, matvec_iq2_xxs_accum_worker, &ctx);
+  9216: }
+  9217: 
+  9218: typedef struct {
+  9219:     uint32_t token;
+  9220:     uint32_t slot;
+  9221: } ds4_expert_pair;
+  9222: 
+  9223: typedef struct {
+  9224:     float *mid;
+  9225:     const uint8_t *gate_base[DS4_MAX_EXPERT];
+  9226:     const uint8_t *up_base[DS4_MAX_EXPERT];
+  9227:     const block_q8_K *xq;
+  9228:     const ds4_expert_pair *pairs;
+  9229:     const uint32_t *pair_ids;
+  9230:     const uint32_t *expert_offset;
+  9231:     const uint32_t *active_expert;
+  9232:     const float *pair_weight;
+  9233:     float clamp;
+  9234:     uint64_t in_dim;
+  9235:     uint64_t out_dim;
+  9236:     uint64_t gate_row_bytes[DS4_MAX_EXPERT];
+  9237:     uint64_t up_row_bytes[DS4_MAX_EXPERT];
+  9238:     uint64_t xq_blocks;
+  9239: } matvec_q2_k_batch_mid_ctx;
+  9240: 
+  9241: static void matvec_q2_k_batch_mid_worker(void *vctx, uint64_t task0, uint64_t task1) {
+  9242:     matvec_q2_k_batch_mid_ctx *ctx = vctx;
+  9243: 
+  9244:     for (uint64_t task = task0; task < task1; task++) {
+  9245:         const uint32_t active_idx = (uint32_t)(task / ctx->out_dim);
+
+==============================================================================================================
+SOURCE LINES 9591-9641
+==============================================================================================================
+  9591:         uint64_t up_in_dim, up_out_dim;
+  9592:         ctx.gate_base[i] = tensor_expert_bytes(m, gate_w, (uint32_t)selected[i],
+  9593:                                                &gate_in_dim, &gate_out_dim, &ctx.gate_row_bytes[i]);
+  9594:         ctx.up_base[i] = tensor_expert_bytes(m, up_w, (uint32_t)selected[i],
+  9595:                                              &up_in_dim, &up_out_dim, &ctx.up_row_bytes[i]);
+  9596:         if (gate_in_dim != up_in_dim || gate_out_dim != up_out_dim) {
+  9597:             ds4_die("paired Q4_K expert tensors do not match");
+  9598:         }
+  9599:         if (i == 0) {
+  9600:             in_dim0 = gate_in_dim;
+  9601:             out_dim0 = gate_out_dim;
+  9602:         } else if (gate_in_dim != in_dim0 || gate_out_dim != out_dim0) {
+  9603:             ds4_die("Q4_K expert tensors do not share a layout");
+  9604:         }
+  9605:         ctx.expert_weight[i] = expert_weight[i];
+  9606:     }
+  9607:     if (in_dim0 % QK_K != 0) ds4_die("Q4_K expert row is not QK_K aligned");
+  9608: 
+  9609:     ctx.in_dim = in_dim0;
+  9610:     ctx.out_dim = out_dim0;
+  9611:     ds4_parallel_for((uint64_t)n_expert * out_dim0, matvec_q4_k_mid_worker, &ctx);
+  9612: }
+  9613: 
+  9614: typedef struct {
+  9615:     float *out;
+  9616:     const uint8_t *base[DS4_MAX_EXPERT_USED];
+  9617:     const block_q8_K *xq[DS4_MAX_EXPERT_USED];
+  9618:     uint64_t in_dim;
+  9619:     uint64_t row_bytes[DS4_MAX_EXPERT_USED];
+  9620:     int n_expert;
+  9621: } matvec_q4_k_accum_ctx;
+  9622: 
+  9623: static void matvec_q4_k_accum_worker(void *vctx, uint64_t row0, uint64_t row1) {
+  9624:     matvec_q4_k_accum_ctx *ctx = vctx;
+  9625: 
+  9626:     for (uint64_t row = row0; row < row1; row++) {
+  9627:         float acc = 0.0f;
+  9628:         for (int i = 0; i < ctx->n_expert; i++) {
+  9629:             float v = 0.0f;
+  9630:             const block_q4_K *br = (const block_q4_K *)(ctx->base[i] + row * ctx->row_bytes[i]);
+  9631:             ds4_vec_dot_q4_K_q8_K((int)ctx->in_dim, &v, br, ctx->xq[i]);
+  9632:             acc += v;
+  9633:         }
+  9634:         ctx->out[row] = acc;
+  9635:     }
+  9636: }
+  9637: 
+  9638: static void matvec_q4_k_experts_accum_prequant(
+  9639:         float            *out,
+  9640:         const ds4_model  *m,
+  9641:         const ds4_tensor *w,
+
+==============================================================================================================
+SOURCE LINES 9657-9707
+==============================================================================================================
+  9657:             in_dim0 = in_dim;
+  9658:             out_dim0 = out_dim;
+  9659:         } else if (in_dim != in_dim0 || out_dim != out_dim0) {
+  9660:             ds4_die("Q4_K expert tensors do not share a layout");
+  9661:         }
+  9662:     }
+  9663:     if (in_dim0 % QK_K != 0) ds4_die("Q4_K expert row is not QK_K aligned");
+  9664: 
+  9665:     const uint64_t n_blocks = in_dim0 / QK_K;
+  9666:     matvec_q4_k_accum_ctx ctx = {
+  9667:         .out = out,
+  9668:         .in_dim = in_dim0,
+  9669:         .n_expert = n_expert,
+  9670:     };
+  9671:     for (int i = 0; i < n_expert; i++) {
+  9672:         ctx.base[i] = base[i];
+  9673:         ctx.row_bytes[i] = row_bytes[i];
+  9674:         ctx.xq[i] = xq + (uint64_t)i * n_blocks;
+  9675:     }
+  9676: 
+  9677:     ds4_parallel_for(out_dim0, matvec_q4_k_accum_worker, &ctx);
+  9678: }
+  9679: 
+  9680: static inline void ds4_vec_dot_q5_q6_K_q8_K(
+  9681:         uint32_t          type,
+  9682:         int               n,
+  9683:         float            *s,
+  9684:         const uint8_t    *x,
+  9685:         const block_q8_K *y) {
+  9686:     if (type == DS4_TENSOR_Q5_K) {
+  9687:         ds4_vec_dot_q5_K_q8_K(n, s, (const block_q5_K *)x, y);
+  9688:     } else if (type == DS4_TENSOR_Q6_K) {
+  9689:         ds4_vec_dot_q6_K_q8_K(n, s, (const block_q6_K *)x, y);
+  9690:     } else {
+  9691:         ds4_die("expected a Q5_K or Q6_K tensor");
+  9692:     }
+  9693: }
+  9694: 
+  9695: typedef struct {
+  9696:     float *out;
+  9697:     const uint8_t *base;
+  9698:     const block_q8_K *xq;
+  9699:     uint64_t in_dim;
+  9700:     uint64_t row_bytes;
+  9701:     uint32_t type;
+  9702: } matvec_q5_q6_k_ctx;
+  9703: 
+  9704: static void matvec_q5_q6_k_worker(void *vctx, uint64_t row0, uint64_t row1) {
+  9705:     matvec_q5_q6_k_ctx *ctx = vctx;
+  9706: 
+  9707:     for (uint64_t row = row0; row < row1; row++) {
+
+==============================================================================================================
+SOURCE LINES 9783-9861
+==============================================================================================================
+  9783:         uint64_t up_in_dim, up_out_dim;
+  9784:         ctx.gate_base[i] = tensor_expert_bytes(m, gate_w, (uint32_t)selected[i],
+  9785:                                                &gate_in_dim, &gate_out_dim, &ctx.gate_row_bytes[i]);
+  9786:         ctx.up_base[i] = tensor_expert_bytes(m, up_w, (uint32_t)selected[i],
+  9787:                                              &up_in_dim, &up_out_dim, &ctx.up_row_bytes[i]);
+  9788:         if (gate_in_dim != up_in_dim || gate_out_dim != up_out_dim) {
+  9789:             ds4_die("paired Q5_K/Q6_K expert tensors do not match");
+  9790:         }
+  9791:         if (i == 0) {
+  9792:             in_dim0 = gate_in_dim;
+  9793:             out_dim0 = gate_out_dim;
+  9794:         } else if (gate_in_dim != in_dim0 || gate_out_dim != out_dim0) {
+  9795:             ds4_die("Q5_K/Q6_K expert tensors do not share a layout");
+  9796:         }
+  9797:         ctx.expert_weight[i] = expert_weight[i];
+  9798:     }
+  9799:     if (in_dim0 % QK_K != 0) ds4_die("Q5_K/Q6_K expert row is not QK_K aligned");
+  9800: 
+  9801:     ctx.in_dim = in_dim0;
+  9802:     ctx.out_dim = out_dim0;
+  9803:     ds4_parallel_for((uint64_t)n_expert * out_dim0, matvec_q5_q6_k_mid_worker, &ctx);
+  9804: }
+  9805: 
+  9806: static void matvec_q5_q6_k_expert(
+  9807:         float            *out,
+  9808:         const ds4_model  *m,
+  9809:         const ds4_tensor *w,
+  9810:         const float      *x,
+  9811:         uint32_t          expert) {
+  9812:     if (w->type != DS4_TENSOR_Q5_K && w->type != DS4_TENSOR_Q6_K) {
+  9813:         ds4_die("expected a Q5_K or Q6_K expert tensor");
+  9814:     }
+  9815: 
+  9816:     uint64_t in_dim, out_dim, row_bytes;
+  9817:     const uint8_t *base = tensor_expert_bytes(m, w, expert, &in_dim, &out_dim, &row_bytes);
+  9818:     if (in_dim % QK_K != 0) ds4_die("Q5_K/Q6_K expert row is not QK_K aligned");
+  9819: 
+  9820:     block_q8_K *xq = xmalloc((size_t)(in_dim / QK_K) * sizeof(xq[0]));
+  9821:     ds4_quantize_row_q8_K(x, xq, (int64_t)in_dim);
+  9822: 
+  9823:     matvec_q5_q6_k_ctx ctx = {
+  9824:         .out = out,
+  9825:         .base = base,
+  9826:         .xq = xq,
+  9827:         .in_dim = in_dim,
+  9828:         .row_bytes = row_bytes,
+  9829:         .type = w->type,
+  9830:     };
+  9831:     ds4_parallel_for(out_dim, matvec_q5_q6_k_worker, &ctx);
+  9832: 
+  9833:     free(xq);
+  9834: }
+  9835: 
+  9836: typedef struct {
+  9837:     float *out;
+  9838:     const uint8_t *base[DS4_MAX_EXPERT_USED];
+  9839:     const block_q8_K *xq[DS4_MAX_EXPERT_USED];
+  9840:     uint64_t in_dim;
+  9841:     uint64_t row_bytes[DS4_MAX_EXPERT_USED];
+  9842:     uint32_t type;
+  9843:     int n_expert;
+  9844: } matvec_q5_q6_k_accum_ctx;
+  9845: 
+  9846: static void matvec_q5_q6_k_accum_worker(void *vctx, uint64_t row0, uint64_t row1) {
+  9847:     matvec_q5_q6_k_accum_ctx *ctx = vctx;
+  9848: 
+  9849:     for (uint64_t row = row0; row < row1; row++) {
+  9850:         float acc = 0.0f;
+  9851:         for (int i = 0; i < ctx->n_expert; i++) {
+  9852:             float v = 0.0f;
+  9853:             ds4_vec_dot_q5_q6_K_q8_K(ctx->type, (int)ctx->in_dim, &v,
+  9854:                                      ctx->base[i] + row * ctx->row_bytes[i],
+  9855:                                      ctx->xq[i]);
+  9856:             acc += v;
+  9857:         }
+  9858:         ctx->out[row] = acc;
+  9859:     }
+  9860: }
+  9861: 
+
+==============================================================================================================
+SOURCE LINES 9884-9934
+==============================================================================================================
+  9884:             out_dim0 = out_dim;
+  9885:         } else if (in_dim != in_dim0 || out_dim != out_dim0) {
+  9886:             ds4_die("Q5_K/Q6_K expert tensors do not share a layout");
+  9887:         }
+  9888:     }
+  9889:     if (in_dim0 % QK_K != 0) ds4_die("Q5_K/Q6_K expert row is not QK_K aligned");
+  9890: 
+  9891:     const uint64_t n_blocks = in_dim0 / QK_K;
+  9892:     matvec_q5_q6_k_accum_ctx ctx = {
+  9893:         .out = out,
+  9894:         .in_dim = in_dim0,
+  9895:         .type = w->type,
+  9896:         .n_expert = n_expert,
+  9897:     };
+  9898:     for (int i = 0; i < n_expert; i++) {
+  9899:         ctx.base[i] = base[i];
+  9900:         ctx.row_bytes[i] = row_bytes[i];
+  9901:         ctx.xq[i] = xq + (uint64_t)i * n_blocks;
+  9902:     }
+  9903: 
+  9904:     ds4_parallel_for(out_dim0, matvec_q5_q6_k_accum_worker, &ctx);
+  9905: }
+  9906: 
+  9907: /* Q4_K batch mid worker: same structure as IQ2_XXS batch but uses Q4_K dot. */
+  9908: typedef struct {
+  9909:     float *mid;
+  9910:     const uint8_t *gate_base[DS4_MAX_EXPERT];
+  9911:     const uint8_t *up_base[DS4_MAX_EXPERT];
+  9912:     const block_q8_K *xq;
+  9913:     const ds4_expert_pair *pairs;
+  9914:     const uint32_t *pair_ids;
+  9915:     const uint32_t *expert_offset;
+  9916:     const uint32_t *active_expert;
+  9917:     const float *pair_weight;
+  9918:     float clamp;
+  9919:     uint64_t in_dim;
+  9920:     uint64_t out_dim;
+  9921:     uint64_t gate_row_bytes[DS4_MAX_EXPERT];
+  9922:     uint64_t up_row_bytes[DS4_MAX_EXPERT];
+  9923:     uint64_t xq_blocks;
+  9924: } matvec_q4_k_batch_mid_ctx;
+  9925: 
+  9926: static void matvec_q4_k_batch_mid_worker(void *vctx, uint64_t task0, uint64_t task1) {
+  9927:     matvec_q4_k_batch_mid_ctx *ctx = vctx;
+  9928: 
+  9929:     for (uint64_t task = task0; task < task1; task++) {
+  9930:         const uint32_t active_idx = (uint32_t)(task / ctx->out_dim);
+  9931:         const uint64_t row = task - (uint64_t)active_idx * ctx->out_dim;
+  9932:         const uint32_t expert = ctx->active_expert[active_idx];
+  9933:         const uint32_t begin = ctx->expert_offset[expert];
+  9934:         const uint32_t end = ctx->expert_offset[expert + 1];
+
+==============================================================================================================
+SOURCE LINES 10539-10589
+==============================================================================================================
+ 10539: 
+ 10540: static void hc_post_batch(
+ 10541:         float       * out_hc,
+ 10542:         const float * block_out,
+ 10543:         const float * residual_hc,
+ 10544:         const float * post,
+ 10545:         const float * comb,
+ 10546:         uint32_t      n_tok,
+ 10547:         uint32_t      n_embd,
+ 10548:         uint32_t      n_hc) {
+ 10549:     hc_post_batch_ctx ctx = {
+ 10550:         .out_hc = out_hc,
+ 10551:         .block_out = block_out,
+ 10552:         .residual_hc = residual_hc,
+ 10553:         .post = post,
+ 10554:         .comb = comb,
+ 10555:         .hc_dim = (uint64_t)n_hc * n_embd,
+ 10556:         .n_embd = n_embd,
+ 10557:         .n_hc = n_hc,
+ 10558:     };
+ 10559:     ds4_parallel_for_min_rows(n_tok, hc_post_batch_worker, &ctx, 1);
+ 10560: }
+ 10561: 
+ 10562: typedef struct {
+ 10563:     float       *out_hc;
+ 10564:     const float *moe;
+ 10565:     const float *shared;
+ 10566:     const float *residual_hc;
+ 10567:     const float *post;
+ 10568:     const float *comb;
+ 10569:     uint64_t     hc_dim;
+ 10570:     uint32_t     n_embd;
+ 10571:     uint32_t     n_hc;
+ 10572: } hc_post_sum_batch_ctx;
+ 10573: 
+ 10574: static void hc_post_sum_batch_worker(void *vctx, uint64_t t0, uint64_t t1) {
+ 10575:     hc_post_sum_batch_ctx *ctx = vctx;
+ 10576:     for (uint64_t t = t0; t < t1; t++) {
+ 10577:         const float *moe = ctx->moe + t * ctx->n_embd;
+ 10578:         const float *shared = ctx->shared + t * ctx->n_embd;
+ 10579:         const float *residual = ctx->residual_hc + t * ctx->hc_dim;
+ 10580:         const float *post = ctx->post + t * ctx->n_hc;
+ 10581:         const float *comb = ctx->comb + t * ctx->n_hc * ctx->n_hc;
+ 10582:         float *out = ctx->out_hc + t * ctx->hc_dim;
+ 10583: 
+ 10584:         for (uint32_t dst = 0; dst < ctx->n_hc; dst++) {
+ 10585:             for (uint32_t d = 0; d < ctx->n_embd; d++) {
+ 10586:                 float acc = (moe[d] + shared[d]) * post[dst];
+ 10587:                 for (uint32_t src = 0; src < ctx->n_hc; src++) {
+ 10588:                     acc += comb[dst + src * ctx->n_hc] *
+ 10589:                         residual[(uint64_t)src * ctx->n_embd + d];
+
+==============================================================================================================
+SOURCE LINES 10598-10648
+==============================================================================================================
+ 10598:         float       * out_hc,
+ 10599:         const float * moe,
+ 10600:         const float * shared,
+ 10601:         const float * residual_hc,
+ 10602:         const float * post,
+ 10603:         const float * comb,
+ 10604:         uint32_t      n_tok,
+ 10605:         uint32_t      n_embd,
+ 10606:         uint32_t      n_hc) {
+ 10607:     hc_post_sum_batch_ctx ctx = {
+ 10608:         .out_hc = out_hc,
+ 10609:         .moe = moe,
+ 10610:         .shared = shared,
+ 10611:         .residual_hc = residual_hc,
+ 10612:         .post = post,
+ 10613:         .comb = comb,
+ 10614:         .hc_dim = (uint64_t)n_hc * n_embd,
+ 10615:         .n_embd = n_embd,
+ 10616:         .n_hc = n_hc,
+ 10617:     };
+ 10618:     ds4_parallel_for_min_rows(n_tok, hc_post_sum_batch_worker, &ctx, 1);
+ 10619: }
+ 10620: 
+ 10621: typedef struct {
+ 10622:     const ds4_model *model;
+ 10623:     const ds4_tensor *fn;
+ 10624:     const ds4_tensor *scale;
+ 10625:     const ds4_tensor *base;
+ 10626:     const ds4_tensor *norm_w;
+ 10627:     const float *inp_hc;
+ 10628:     float *residual_hc;
+ 10629:     float *cur;
+ 10630:     float *norm;
+ 10631:     float *post;
+ 10632:     float *comb;
+ 10633:     uint64_t hc_dim;
+ 10634:     uint32_t n_hc;
+ 10635: } hc_pre_norm_batch_ctx;
+ 10636: 
+ 10637: static void hc_pre_norm_batch_worker(void *vctx, uint64_t t0, uint64_t t1) {
+ 10638:     hc_pre_norm_batch_ctx *ctx = vctx;
+ 10639:     const float *norm_w = tensor_data(ctx->model, ctx->norm_w);
+ 10640:     float *flat = xmalloc((size_t)ctx->hc_dim * sizeof(flat[0]));
+ 10641: 
+ 10642:     for (uint64_t t = t0; t < t1; t++) {
+ 10643:         const float *residual = ctx->inp_hc + t * ctx->hc_dim;
+ 10644:         if (ctx->residual_hc) {
+ 10645:             float *dst = ctx->residual_hc + t * ctx->hc_dim;
+ 10646:             memcpy(dst, residual, (size_t)ctx->hc_dim * sizeof(dst[0]));
+ 10647:             residual = dst;
+ 10648:         }
+
+==============================================================================================================
+SOURCE LINES 10680-10730
+==============================================================================================================
+ 10680:         float            * cur,
+ 10681:         float            * norm,
+ 10682:         float            * post,
+ 10683:         float            * comb,
+ 10684:         uint32_t           n_tok) {
+ 10685:     hc_pre_norm_batch_ctx ctx = {
+ 10686:         .model = model,
+ 10687:         .fn = fn,
+ 10688:         .scale = scale,
+ 10689:         .base = base,
+ 10690:         .norm_w = norm_w,
+ 10691:         .inp_hc = inp_hc,
+ 10692:         .residual_hc = residual_hc,
+ 10693:         .cur = cur,
+ 10694:         .norm = norm,
+ 10695:         .post = post,
+ 10696:         .comb = comb,
+ 10697:         .hc_dim = (uint64_t)DS4_N_HC * DS4_N_EMBD,
+ 10698:         .n_hc = DS4_N_HC,
+ 10699:     };
+ 10700:     ds4_parallel_for_min_rows(n_tok, hc_pre_norm_batch_worker, &ctx, 1);
+ 10701: }
+ 10702: 
+ 10703: static void layer_attn_norm_one(
+ 10704:         float             * out,
+ 10705:         const ds4_model   * model,
+ 10706:         const ds4_layer_weights * layer,
+ 10707:         const float       * x) {
+ 10708:     const float *attn_norm = tensor_data(model, layer->attn_norm);
+ 10709:     rms_norm_weight(out, x, attn_norm, DS4_N_EMBD, DS4_RMS_EPS);
+ 10710: }
+ 10711: 
+ 10712: /* =========================================================================
+ 10713:  * Attention Projections, RoPE, and Attention Output.
+ 10714:  * =========================================================================
+ 10715:  *
+ 10716:  * This block performs the attention half of a transformer layer: HC pre,
+ 10717:  * attention RMSNorm, Q and KV projections, layer-specific RoPE, sink-aware
+ 10718:  * attention over raw and compressed KV rows, and the grouped LoRA output
+ 10719:  * projection back to embedding width.
+ 10720:  */
+ 10721: 
+ 10722: /* Q projection is low-rank: Q8_0 into the model-specific LoRA-Q rank,
+ 10723:  * RMSNorm, then Q8_0 back to all attention heads. */
+ 10724: static void layer_q_projection_normed_one(
+ 10725:         const ds4_model   * model,
+ 10726:         const ds4_layer_weights * layer,
+ 10727:         const float       * norm,
+ 10728:         float             * q) {
+ 10729:     const uint32_t q_rank = DS4_N_LORA_Q;
+ 10730:     float *qr = xmalloc((size_t)q_rank * sizeof(qr[0]));
+
+==============================================================================================================
+SOURCE LINES 10945-10995
+==============================================================================================================
+ 10945: static void rope_tail_layer_batch_inplace(
+ 10946:         float            *x,
+ 10947:         uint64_t          stride,
+ 10948:         uint32_t          n_head,
+ 10949:         uint32_t          head_dim,
+ 10950:         uint32_t          n_rot,
+ 10951:         uint32_t          pos0,
+ 10952:         uint32_t          il,
+ 10953:         bool              inverse,
+ 10954:         uint32_t          n_tok) {
+ 10955:     rope_tail_batch_ctx ctx = {
+ 10956:         .x = x,
+ 10957:         .stride = stride,
+ 10958:         .n_head = n_head,
+ 10959:         .head_dim = head_dim,
+ 10960:         .n_rot = n_rot,
+ 10961:         .pos0 = pos0,
+ 10962:         .il = il,
+ 10963:         .inverse = inverse,
+ 10964:     };
+ 10965:     ds4_parallel_for_min_rows(n_tok, rope_tail_batch_worker, &ctx, 1);
+ 10966: }
+ 10967: 
+ 10968: static inline float dot_f32(const float *a, const float *b, uint32_t n) {
+ 10969: #if defined(__ARM_NEON)
+ 10970:     uint32_t i = 0;
+ 10971:     float32x4_t acc0 = vdupq_n_f32(0.0f);
+ 10972:     float32x4_t acc1 = vdupq_n_f32(0.0f);
+ 10973:     for (; i + 8 <= n; i += 8) {
+ 10974:         acc0 = vfmaq_f32(acc0, vld1q_f32(a + i),     vld1q_f32(b + i));
+ 10975:         acc1 = vfmaq_f32(acc1, vld1q_f32(a + i + 4), vld1q_f32(b + i + 4));
+ 10976:     }
+ 10977:     float acc = vaddvq_f32(vaddq_f32(acc0, acc1));
+ 10978:     for (; i < n; i++) acc += a[i] * b[i];
+ 10979:     return acc;
+ 10980: #else
+ 10981:     float acc = 0.0f;
+ 10982:     for (uint32_t i = 0; i < n; i++) acc += a[i] * b[i];
+ 10983:     return acc;
+ 10984: #endif
+ 10985: }
+ 10986: 
+ 10987: static inline void axpy_f32(float *y, const float *x, float a, uint32_t n) {
+ 10988: #if defined(__ARM_NEON)
+ 10989:     uint32_t i = 0;
+ 10990:     const float32x4_t av = vdupq_n_f32(a);
+ 10991:     for (; i + 8 <= n; i += 8) {
+ 10992:         vst1q_f32(y + i,     vfmaq_f32(vld1q_f32(y + i),     av, vld1q_f32(x + i)));
+ 10993:         vst1q_f32(y + i + 4, vfmaq_f32(vld1q_f32(y + i + 4), av, vld1q_f32(x + i + 4)));
+ 10994:     }
+ 10995:     for (; i < n; i++) y[i] += a * x[i];
+
+==============================================================================================================
+SOURCE LINES 11410-11460
+==============================================================================================================
+ 11410:         ds4_die("shared expert tensors do not share the expected Q8_0 layout");
+ 11411:     }
+ 11412: 
+ 11413:     float *gate = xmalloc((size_t)n_tok * hidden * sizeof(gate[0]));
+ 11414:     float *up = xmalloc((size_t)n_tok * hidden * sizeof(up[0]));
+ 11415:     float *mid = xmalloc((size_t)n_tok * hidden * sizeof(mid[0]));
+ 11416: 
+ 11417:     matmul_q8_0_pair_batch(gate, up, model,
+ 11418:                            layer->ffn_gate_shexp,
+ 11419:                            layer->ffn_up_shexp,
+ 11420:                            x,
+ 11421:                            n_tok);
+ 11422: 
+ 11423:     swiglu_batch_ctx swiglu_ctx = {
+ 11424:         .mid = mid,
+ 11425:         .gate = gate,
+ 11426:         .up = up,
+ 11427:         .n = hidden,
+ 11428:         .clamp = DS4_SWIGLU_CLAMP_EXP,
+ 11429:     };
+ 11430:     ds4_parallel_for(n_tok, swiglu_batch_worker, &swiglu_ctx);
+ 11431: 
+ 11432:     matmul_q8_0_batch(out, model, layer->ffn_down_shexp, mid, n_tok);
+ 11433: 
+ 11434:     free(mid);
+ 11435:     free(up);
+ 11436:     free(gate);
+ 11437: }
+ 11438: 
+ 11439: /* Early DS4 layers use token-id hash routing instead of top-k routing. */
+ 11440: static void layer_hash_selected_experts(
+ 11441:         int                    selected[DS4_MAX_EXPERT_USED],
+ 11442:         const ds4_model       *model,
+ 11443:         const ds4_layer_weights *layer,
+ 11444:         int                    token) {
+ 11445:     ds4_tensor *t = layer->ffn_gate_tid2eid;
+ 11446:     if (!t) ds4_die("hash routing table is missing for this layer");
+ 11447:     if (t->type != 26 || t->ndim != 2 || t->dim[0] != DS4_N_EXPERT_USED) {
+ 11448:         ds4_die("ffn_gate_tid2eid.weight has an unexpected layout");
+ 11449:     }
+ 11450:     if (token < 0 || (uint64_t)token >= t->dim[1]) {
+ 11451:         ds4_die("token id is outside the hash routing table");
+ 11452:     }
+ 11453: 
+ 11454:     const int32_t *table = tensor_data(model, t);
+ 11455:     const int32_t *row = table + (uint64_t)token * DS4_N_EXPERT_USED;
+ 11456:     for (uint32_t i = 0; i < DS4_N_EXPERT_USED; i++) selected[i] = row[i];
+ 11457: }
+ 11458: 
+ 11459: /* Router scores use sqrt(softplus(logit)); normalization happens only after
+ 11460:  * the six selected experts are known. */
+
+==============================================================================================================
+SOURCE LINES 12698-12784
+==============================================================================================================
+ 12698:             .active_expert = active_expert,
+ 12699:             .pair_weight = pair_weight,
+ 12700:             .clamp = clamp,
+ 12701:             .in_dim = expert_in_dim,
+ 12702:             .out_dim = expert_out_dim,
+ 12703:             .blocks = x_blocks,
+ 12704:         };
+ 12705:         for (uint32_t ai = 0; ai < n_active; ai++) {
+ 12706:             const uint32_t e = active_expert[ai];
+ 12707:             uint64_t gate_in_dim, gate_out_dim;
+ 12708:             uint64_t up_in_dim, up_out_dim;
+ 12709:             mid_ctx.gate_base[e] = tensor_expert_bytes(model, layer->ffn_gate_exps, e,
+ 12710:                                                        &gate_in_dim, &gate_out_dim, &mid_ctx.gate_row_bytes[e]);
+ 12711:             mid_ctx.up_base[e] = tensor_expert_bytes(model, layer->ffn_up_exps, e,
+ 12712:                                                      &up_in_dim, &up_out_dim, &mid_ctx.up_row_bytes[e]);
+ 12713:             if (gate_in_dim != expert_in_dim || up_in_dim != expert_in_dim ||
+ 12714:                 gate_out_dim != expert_out_dim || up_out_dim != expert_out_dim) {
+ 12715:                 ds4_die("Q8_0 batch expert tensor layout mismatch");
+ 12716:             }
+ 12717:         }
+ 12718:         ds4_parallel_for((uint64_t)n_active * expert_out_dim, matvec_q8_0_batch_mid_worker, &mid_ctx);
+ 12719: 
+ 12720:         const uint64_t mid_blocks = down_in_dim / 32u;
+ 12721:         int8_t *midq8 = xmalloc((size_t)total_pairs * mid_blocks * 32u);
+ 12722:         float *midscale8 = xmalloc((size_t)total_pairs * mid_blocks * sizeof(float));
+ 12723:         for (uint32_t p = 0; p < total_pairs; p++) {
+ 12724:             quantize_q8_0_activation(mid + (uint64_t)p * down_in_dim,
+ 12725:                                      midq8 + (uint64_t)p * mid_blocks * 32u,
+ 12726:                                      midscale8 + (uint64_t)p * mid_blocks,
+ 12727:                                      down_in_dim);
+ 12728:         }
+ 12729:         free(mid);
+ 12730: 
+ 12731:         matvec_q8_0_batch_accum_rows_ctx down_ctx = {
+ 12732:             .moe = moe,
+ 12733:             .midq = midq8,
+ 12734:             .midscale = midscale8,
+ 12735:             .pairs = pairs,
+ 12736:             .pair_ids = pair_ids,
+ 12737:             .expert_offset = counts,
+ 12738:             .active_expert = active_expert,
+ 12739:             .n_active = n_active,
+ 12740:             .n_tok = n_tok,
+ 12741:             .in_dim = down_in_dim,
+ 12742:             .out_dim = down_out_dim,
+ 12743:             .blocks = mid_blocks,
+ 12744:         };
+ 12745:         for (uint32_t ai = 0; ai < n_active; ai++) {
+ 12746:             const uint32_t e = active_expert[ai];
+ 12747:             uint64_t in_dim, out_dim;
+ 12748:             down_ctx.base[e] = tensor_expert_bytes(model, layer->ffn_down_exps, e,
+ 12749:                                                    &in_dim, &out_dim, &down_ctx.row_bytes[e]);
+ 12750:             if (in_dim != down_in_dim || out_dim != down_out_dim) {
+ 12751:                 ds4_die("Q8_0 batch down expert tensor layout mismatch");
+ 12752:             }
+ 12753:         }
+ 12754:         ds4_parallel_for(down_out_dim, matvec_q8_0_batch_accum_rows_worker, &down_ctx);
+ 12755: 
+ 12756:         free(midscale8);
+ 12757:         free(midq8);
+ 12758:         free(xscale8);
+ 12759:         free(xq8);
+ 12760:         free(pair_ids);
+ 12761:         free(pairs);
+ 12762:         free(pair_weight);
+ 12763:         free(selected);
+ 12764:         (void)il;
+ 12765:         return;
+ 12766:     }
+ 12767: 
+ 12768:     if (routed_q8_k) {
+ 12769:         const uint64_t xq_blocks = expert_in_dim / QK_K;
+ 12770:         block_q8_K *xq = xmalloc((size_t)n_tok * xq_blocks * sizeof(xq[0]));
+ 12771:         for (uint32_t t = 0; t < n_tok; t++) {
+ 12772:             ds4_quantize_row_q8_K(norm + (uint64_t)t * expert_in_dim,
+ 12773:                                   xq + (uint64_t)t * xq_blocks,
+ 12774:                                   (int64_t)expert_in_dim);
+ 12775:         }
+ 12776: 
+ 12777:         float *mid = xmalloc((size_t)total_pairs * expert_out_dim * sizeof(mid[0]));
+ 12778: 
+ 12779:         matvec_q8_k_batch_mid_ctx mid_ctx = {
+ 12780:             .mid = mid,
+ 12781:             .xq = xq,
+ 12782:             .pairs = pairs,
+ 12783:             .pair_ids = pair_ids,
+ 12784:             .expert_offset = counts,
+
+==============================================================================================================
+SOURCE LINES 12787-12874
+==============================================================================================================
+ 12787:             .clamp = clamp,
+ 12788:             .in_dim = expert_in_dim,
+ 12789:             .out_dim = expert_out_dim,
+ 12790:             .xq_blocks = xq_blocks,
+ 12791:         };
+ 12792: 
+ 12793:         for (uint32_t ai = 0; ai < n_active; ai++) {
+ 12794:             const uint32_t e = active_expert[ai];
+ 12795:             uint64_t gate_in_dim, gate_out_dim;
+ 12796:             uint64_t up_in_dim, up_out_dim;
+ 12797:             mid_ctx.gate_base[e] = tensor_expert_bytes(model, layer->ffn_gate_exps, e,
+ 12798:                                                        &gate_in_dim, &gate_out_dim, &mid_ctx.gate_row_bytes[e]);
+ 12799:             mid_ctx.up_base[e] = tensor_expert_bytes(model, layer->ffn_up_exps, e,
+ 12800:                                                      &up_in_dim, &up_out_dim, &mid_ctx.up_row_bytes[e]);
+ 12801:             if (gate_in_dim != expert_in_dim || up_in_dim != expert_in_dim ||
+ 12802:                 gate_out_dim != expert_out_dim || up_out_dim != expert_out_dim) {
+ 12803:                 ds4_die("Q8_K batch expert tensor layout mismatch");
+ 12804:             }
+ 12805:         }
+ 12806: 
+ 12807:         ds4_parallel_for((uint64_t)n_active * expert_out_dim, matvec_q8_k_batch_mid_worker, &mid_ctx);
+ 12808: 
+ 12809:         const uint64_t midq_blocks = down_in_dim / QK_K;
+ 12810:         block_q8_K *midq = xmalloc((size_t)total_pairs * midq_blocks * sizeof(midq[0]));
+ 12811:         quantize_mid_pairs_ctx quant_ctx = {
+ 12812:             .mid = mid,
+ 12813:             .midq = midq,
+ 12814:             .down_in_dim = down_in_dim,
+ 12815:             .down_blocks = midq_blocks,
+ 12816:         };
+ 12817:         ds4_parallel_for(total_pairs, quantize_mid_pairs_worker, &quant_ctx);
+ 12818:         free(mid);
+ 12819: 
+ 12820:         matvec_q8_k_batch_accum_rows_ctx down_ctx = {
+ 12821:             .moe = moe,
+ 12822:             .midq = midq,
+ 12823:             .pairs = pairs,
+ 12824:             .pair_ids = pair_ids,
+ 12825:             .expert_offset = counts,
+ 12826:             .active_expert = active_expert,
+ 12827:             .n_active = n_active,
+ 12828:             .n_tok = n_tok,
+ 12829:             .in_dim = down_in_dim,
+ 12830:             .out_dim = down_out_dim,
+ 12831:             .midq_blocks = midq_blocks,
+ 12832:         };
+ 12833: 
+ 12834:         for (uint32_t ai = 0; ai < n_active; ai++) {
+ 12835:             const uint32_t e = active_expert[ai];
+ 12836:             uint64_t in_dim, out_dim;
+ 12837:             down_ctx.base[e] = tensor_expert_bytes(model, layer->ffn_down_exps, e,
+ 12838:                                                    &in_dim, &out_dim, &down_ctx.row_bytes[e]);
+ 12839:             if (in_dim != down_in_dim || out_dim != down_out_dim) {
+ 12840:                 ds4_die("Q8_K batch down expert tensor layout mismatch");
+ 12841:             }
+ 12842:         }
+ 12843: 
+ 12844:         ds4_parallel_for(down_out_dim, matvec_q8_k_batch_accum_rows_worker, &down_ctx);
+ 12845: 
+ 12846:         free(midq);
+ 12847:         free(pair_ids);
+ 12848:         free(xq);
+ 12849:         free(pairs);
+ 12850:         free(pair_weight);
+ 12851:         free(selected);
+ 12852: 
+ 12853:         (void)il;
+ 12854:         return;
+ 12855:     }
+ 12856: 
+ 12857:     const uint64_t xq_blocks = expert_in_dim / QK_K;
+ 12858:     block_q8_K *xq = xmalloc((size_t)n_tok * xq_blocks * sizeof(xq[0]));
+ 12859:     for (uint32_t t = 0; t < n_tok; t++) {
+ 12860:         ds4_quantize_row_q8_K(norm + (uint64_t)t * expert_in_dim,
+ 12861:                               xq + (uint64_t)t * xq_blocks,
+ 12862:                               (int64_t)expert_in_dim);
+ 12863:     }
+ 12864: 
+ 12865:     float *mid = xmalloc((size_t)total_pairs * expert_out_dim * sizeof(mid[0]));
+ 12866: 
+ 12867:     const uint32_t gate_type = layer->ffn_gate_exps->type;
+ 12868: 
+ 12869:     /* Build mid vectors: dispatch based on gate/up tensor type. */
+ 12870:     if (gate_type == DS4_TENSOR_IQ2_XXS) {
+ 12871:         matvec_iq2_xxs_batch_mid_ctx mid_ctx = {
+ 12872:             .mid = mid,
+ 12873:             .xq = xq,
+ 12874:             .pairs = pairs,
+
+==============================================================================================================
+SOURCE LINES 12879-13085
+==============================================================================================================
+ 12879:             .clamp = clamp,
+ 12880:             .in_dim = expert_in_dim,
+ 12881:             .out_dim = expert_out_dim,
+ 12882:             .xq_blocks = xq_blocks,
+ 12883:         };
+ 12884: 
+ 12885:         for (uint32_t ai = 0; ai < n_active; ai++) {
+ 12886:             const uint32_t e = active_expert[ai];
+ 12887:             uint64_t gate_in_dim, gate_out_dim;
+ 12888:             uint64_t up_in_dim, up_out_dim;
+ 12889:             mid_ctx.gate_base[e] = tensor_expert_bytes(model, layer->ffn_gate_exps, e,
+ 12890:                                                        &gate_in_dim, &gate_out_dim, &mid_ctx.gate_row_bytes[e]);
+ 12891:             mid_ctx.up_base[e] = tensor_expert_bytes(model, layer->ffn_up_exps, e,
+ 12892:                                                      &up_in_dim, &up_out_dim, &mid_ctx.up_row_bytes[e]);
+ 12893:             if (gate_in_dim != expert_in_dim || up_in_dim != expert_in_dim ||
+ 12894:                 gate_out_dim != expert_out_dim || up_out_dim != expert_out_dim) {
+ 12895:                 ds4_die("batch expert tensor layout mismatch");
+ 12896:             }
+ 12897:         }
+ 12898: 
+ 12899:         ds4_parallel_for((uint64_t)n_active * expert_out_dim, matvec_iq2_xxs_batch_mid_worker, &mid_ctx);
+ 12900:     } else if (gate_type == DS4_TENSOR_Q2_K) {
+ 12901:         matvec_q2_k_batch_mid_ctx mid_ctx = {
+ 12902:             .mid = mid,
+ 12903:             .xq = xq,
+ 12904:             .pairs = pairs,
+ 12905:             .pair_ids = pair_ids,
+ 12906:             .expert_offset = counts,
+ 12907:             .active_expert = active_expert,
+ 12908:             .pair_weight = pair_weight,
+ 12909:             .clamp = clamp,
+ 12910:             .in_dim = expert_in_dim,
+ 12911:             .out_dim = expert_out_dim,
+ 12912:             .xq_blocks = xq_blocks,
+ 12913:         };
+ 12914: 
+ 12915:         for (uint32_t ai = 0; ai < n_active; ai++) {
+ 12916:             const uint32_t e = active_expert[ai];
+ 12917:             uint64_t gate_in_dim, gate_out_dim;
+ 12918:             uint64_t up_in_dim, up_out_dim;
+ 12919:             mid_ctx.gate_base[e] = tensor_expert_bytes(model, layer->ffn_gate_exps, e,
+ 12920:                                                        &gate_in_dim, &gate_out_dim, &mid_ctx.gate_row_bytes[e]);
+ 12921:             mid_ctx.up_base[e] = tensor_expert_bytes(model, layer->ffn_up_exps, e,
+ 12922:                                                      &up_in_dim, &up_out_dim, &mid_ctx.up_row_bytes[e]);
+ 12923:             if (gate_in_dim != expert_in_dim || up_in_dim != expert_in_dim ||
+ 12924:                 gate_out_dim != expert_out_dim || up_out_dim != expert_out_dim) {
+ 12925:                 ds4_die("batch expert tensor layout mismatch");
+ 12926:             }
+ 12927:         }
+ 12928: 
+ 12929:         ds4_parallel_for((uint64_t)n_active * expert_out_dim, matvec_q2_k_batch_mid_worker, &mid_ctx);
+ 12930:     } else if (gate_type == DS4_TENSOR_Q4_K) {
+ 12931:         matvec_q4_k_batch_mid_ctx mid_ctx = {
+ 12932:             .mid = mid,
+ 12933:             .xq = xq,
+ 12934:             .pairs = pairs,
+ 12935:             .pair_ids = pair_ids,
+ 12936:             .expert_offset = counts,
+ 12937:             .active_expert = active_expert,
+ 12938:             .pair_weight = pair_weight,
+ 12939:             .clamp = clamp,
+ 12940:             .in_dim = expert_in_dim,
+ 12941:             .out_dim = expert_out_dim,
+ 12942:             .xq_blocks = xq_blocks,
+ 12943:         };
+ 12944: 
+ 12945:         for (uint32_t ai = 0; ai < n_active; ai++) {
+ 12946:             const uint32_t e = active_expert[ai];
+ 12947:             uint64_t gate_in_dim, gate_out_dim;
+ 12948:             uint64_t up_in_dim, up_out_dim;
+ 12949:             mid_ctx.gate_base[e] = tensor_expert_bytes(model, layer->ffn_gate_exps, e,
+ 12950:                                                        &gate_in_dim, &gate_out_dim, &mid_ctx.gate_row_bytes[e]);
+ 12951:             mid_ctx.up_base[e] = tensor_expert_bytes(model, layer->ffn_up_exps, e,
+ 12952:                                                      &up_in_dim, &up_out_dim, &mid_ctx.up_row_bytes[e]);
+ 12953:             if (gate_in_dim != expert_in_dim || up_in_dim != expert_in_dim ||
+ 12954:                 gate_out_dim != expert_out_dim || up_out_dim != expert_out_dim) {
+ 12955:                 ds4_die("batch expert tensor layout mismatch");
+ 12956:             }
+ 12957:         }
+ 12958: 
+ 12959:         ds4_parallel_for((uint64_t)n_active * expert_out_dim, matvec_q4_k_batch_mid_worker, &mid_ctx);
+ 12960:     } else {
+ 12961:         ds4_die("unsupported gate/up expert tensor type for batch");
+ 12962:     }
+ 12963: 
+ 12964:     const uint64_t midq_blocks = down_in_dim / QK_K;
+ 12965:     block_q8_K *midq = xmalloc((size_t)total_pairs * midq_blocks * sizeof(midq[0]));
+ 12966:     quantize_mid_pairs_ctx quant_ctx = {
+ 12967:         .mid = mid,
+ 12968:         .midq = midq,
+ 12969:         .down_in_dim = down_in_dim,
+ 12970:         .down_blocks = midq_blocks,
+ 12971:     };
+ 12972:     ds4_parallel_for(total_pairs, quantize_mid_pairs_worker, &quant_ctx);
+ 12973:     free(mid);
+ 12974: 
+ 12975:     /* Down projection: dispatch based on down tensor type. */
+ 12976:     const uint32_t down_type = layer->ffn_down_exps->type;
+ 12977: 
+ 12978:     if (down_type == DS4_TENSOR_IQ2_XXS) {
+ 12979:         matvec_iq2_xxs_batch_accum_rows_ctx down_ctx = {
+ 12980:             .moe = moe,
+ 12981:             .midq = midq,
+ 12982:             .pairs = pairs,
+ 12983:             .pair_ids = pair_ids,
+ 12984:             .expert_offset = counts,
+ 12985:             .active_expert = active_expert,
+ 12986:             .n_active = n_active,
+ 12987:             .n_tok = n_tok,
+ 12988:             .in_dim = down_in_dim,
+ 12989:             .out_dim = down_out_dim,
+ 12990:             .midq_blocks = midq_blocks,
+ 12991:         };
+ 12992: 
+ 12993:         for (uint32_t ai = 0; ai < n_active; ai++) {
+ 12994:             const uint32_t e = active_expert[ai];
+ 12995:             uint64_t in_dim, out_dim;
+ 12996:             down_ctx.base[e] = tensor_expert_bytes(model, layer->ffn_down_exps, e,
+ 12997:                                                    &in_dim, &out_dim, &down_ctx.row_bytes[e]);
+ 12998:             if (in_dim != down_in_dim || out_dim != down_out_dim) {
+ 12999:                 ds4_die("batch expert tensor layout mismatch");
+ 13000:             }
+ 13001:         }
+ 13002: 
+ 13003:         ds4_parallel_for(down_out_dim, matvec_iq2_xxs_batch_accum_rows_worker, &down_ctx);
+ 13004:     } else if (down_type == DS4_TENSOR_Q2_K) {
+ 13005:         matvec_q2_k_batch_accum_rows_ctx down_ctx = {
+ 13006:             .moe = moe,
+ 13007:             .midq = midq,
+ 13008:             .pairs = pairs,
+ 13009:             .pair_ids = pair_ids,
+ 13010:             .expert_offset = counts,
+ 13011:             .active_expert = active_expert,
+ 13012:             .n_active = n_active,
+ 13013:             .n_tok = n_tok,
+ 13014:             .in_dim = down_in_dim,
+ 13015:             .out_dim = down_out_dim,
+ 13016:             .midq_blocks = midq_blocks,
+ 13017:         };
+ 13018: 
+ 13019:         for (uint32_t ai = 0; ai < n_active; ai++) {
+ 13020:             const uint32_t e = active_expert[ai];
+ 13021:             uint64_t in_dim, out_dim;
+ 13022:             down_ctx.base[e] = tensor_expert_bytes(model, layer->ffn_down_exps, e,
+ 13023:                                                    &in_dim, &out_dim, &down_ctx.row_bytes[e]);
+ 13024:             if (in_dim != down_in_dim || out_dim != down_out_dim) {
+ 13025:                 ds4_die("batch expert tensor layout mismatch");
+ 13026:             }
+ 13027:         }
+ 13028: 
+ 13029:         ds4_parallel_for(down_out_dim, matvec_q2_k_batch_accum_rows_worker, &down_ctx);
+ 13030:     } else if (down_type == DS4_TENSOR_Q4_K) {
+ 13031:         matvec_q4_k_batch_accum_rows_ctx down_ctx = {
+ 13032:             .moe = moe,
+ 13033:             .midq = midq,
+ 13034:             .pairs = pairs,
+ 13035:             .pair_ids = pair_ids,
+ 13036:             .expert_offset = counts,
+ 13037:             .active_expert = active_expert,
+ 13038:             .n_active = n_active,
+ 13039:             .n_tok = n_tok,
+ 13040:             .in_dim = down_in_dim,
+ 13041:             .out_dim = down_out_dim,
+ 13042:             .midq_blocks = midq_blocks,
+ 13043:         };
+ 13044: 
+ 13045:         for (uint32_t ai = 0; ai < n_active; ai++) {
+ 13046:             const uint32_t e = active_expert[ai];
+ 13047:             uint64_t in_dim, out_dim;
+ 13048:             down_ctx.base[e] = tensor_expert_bytes(model, layer->ffn_down_exps, e,
+ 13049:                                                    &in_dim, &out_dim, &down_ctx.row_bytes[e]);
+ 13050:             if (in_dim != down_in_dim || out_dim != down_out_dim) {
+ 13051:                 ds4_die("batch expert tensor layout mismatch");
+ 13052:             }
+ 13053:         }
+ 13054: 
+ 13055:         ds4_parallel_for(down_out_dim, matvec_q4_k_batch_accum_rows_worker, &down_ctx);
+ 13056:     } else {
+ 13057:         ds4_die("unsupported down expert tensor type for batch");
+ 13058:     }
+ 13059: 
+ 13060:     free(midq);
+ 13061:     free(pair_ids);
+ 13062:     free(xq);
+ 13063:     free(pairs);
+ 13064:     free(pair_weight);
+ 13065:     free(selected);
+ 13066: 
+ 13067:     (void)il;
+ 13068: }
+ 13069: 
+ 13070: static void print_vec_stats(const char *name, const float *x, uint64_t n);
+ 13071: 
+ 13072: /* Full FFN sublayer for one token: HC pre, RMSNorm, routed MoE, shared expert,
+ 13073:  * sum, and HC post. */
+ 13074: static void layer_ffn_one(
+ 13075:         float             * out_hc,
+ 13076:         const ds4_model   * model,
+ 13077:         const ds4_layer_weights * layer,
+ 13078:         const float       * inp_hc,
+ 13079:         uint32_t            il,
+ 13080:         int                 token,
+ 13081:         const float       * steering_dirs,
+ 13082:         float               steering_scale,
+ 13083:         bool                trace) {
+ 13084:     const uint32_t n_hc = DS4_N_HC;
+ 13085:     const bool profile = getenv("DS4_DECODE_PROFILE_DETAIL") != NULL;
+
+==============================================================================================================
+SOURCE LINES 17384-17434
+==============================================================================================================
+ 17384:         router->dim[1] != DS4_N_EXPERT) {
+ 17385: 
+ 17386:         return false;
+ 17387:     }
+ 17388: 
+ 17389:     float score[DS4_MAX_EXPERT];
+ 17390: 
+ 17391:     cpu_v18_fast_router_ctx ctx = {
+ 17392:         .logits = score,
+ 17393:         .data =
+ 17394:             (const uint16_t *)
+ 17395:                 tensor_data(model, router),
+ 17396:         .x = x,
+ 17397:         .in_dim = router->dim[0],
+ 17398:     };
+ 17399: 
+ 17400:     /*
+ 17401:      * Same row-level parallelism as the existing F16
+ 17402:      * matvec, but each row now uses F16C/AVX2.
+ 17403:      */
+ 17404:     ds4_parallel_for_min_rows(
+ 17405:         DS4_N_EXPERT,
+ 17406:         cpu_v18_fast_router_worker,
+ 17407:         &ctx,
+ 17408:         1);
+ 17409: 
+ 17410:     const float *bias =
+ 17411:         layer->ffn_exp_probs_b
+ 17412:             ? (const float *)
+ 17413:                 tensor_data(
+ 17414:                     model,
+ 17415:                     layer->ffn_exp_probs_b)
+ 17416:             : NULL;
+ 17417: 
+ 17418:     /*
+ 17419:      * Reproduce the shadow routing score semantics:
+ 17420:      *
+ 17421:      * score = sqrt(softplus(logit)) + bias
+ 17422:      *
+ 17423:      * Only IDs matter for speculative I/O.
+ 17424:      */
+ 17425:     for (uint32_t i = 0;
+ 17426:          i < DS4_N_EXPERT;
+ 17427:          i++) {
+ 17428: 
+ 17429:         score[i] =
+ 17430:             sqrtf(
+ 17431:                 softplus_stable(
+ 17432:                     score[i]));
+ 17433: 
+ 17434:         if (bias) {
+
+==============================================================================================================
+SOURCE LINES 18394-18444
+==============================================================================================================
+ 18394:     if (routed_q8_k) {
+ 18395:         if (expert_in_dim % QK_K != 0) ds4_die("Q8_K expert input is not QK_K aligned");
+ 18396:         if (down_in_dim != DS4_N_FF_EXP || down_in_dim % QK_K != 0) {
+ 18397:             ds4_die("Q8_K expert input has an unexpected layout");
+ 18398:         }
+ 18399:     }
+ 18400:     routed_moe_tokens_ctx ctx = {
+ 18401:         .moe = moe,
+ 18402:         .model = model,
+ 18403:         .layer = layer,
+ 18404:         .norm = norm,
+ 18405:         .token_ids = token_ids,
+ 18406:         .expert_in_dim = expert_in_dim,
+ 18407:         .down_in_dim = down_in_dim,
+ 18408:         .il = il,
+ 18409:         .routed_q8_0 =
+ 18410:             layer->ffn_gate_exps->type == DS4_TENSOR_Q8_0 &&
+ 18411:             layer->ffn_up_exps->type == DS4_TENSOR_Q8_0 &&
+ 18412:             layer->ffn_down_exps->type == DS4_TENSOR_Q8_0,
+ 18413:     };
+ 18414:     ds4_parallel_for_min_rows(n_tok, routed_moe_tokens_worker, &ctx, 1);
+ 18415: }
+ 18416: 
+ 18417: /* Default prefill FFN path.  HC and shared expert are batched, while routed
+ 18418:  * experts can run either token-parallel or expert-grouped depending on size. */
+ 18419: static void layer_ffn_shared_batch(
+ 18420:         float             * out_hc,
+ 18421:         const ds4_model   * model,
+ 18422:         const ds4_layer_weights * layer,
+ 18423:         const float       * inp_hc,
+ 18424:         const int         * token_ids,
+ 18425:         uint32_t            n_tok,
+ 18426:         uint32_t            il,
+ 18427:         const float       * steering_dirs,
+ 18428:         float               steering_scale) {
+ 18429:     const bool profile = getenv("DS4_PREFILL_PROFILE_DETAIL") != NULL;
+ 18430:     const double t_start = profile ? now_sec() : 0.0;
+ 18431:     double t_hc_norm = 0.0;
+ 18432:     double t_routed = 0.0;
+ 18433:     double t_shared = 0.0;
+ 18434:     double t_post = 0.0;
+ 18435:     const uint32_t n_hc = DS4_N_HC;
+ 18436:     float *ffn_cur = xmalloc((size_t)n_tok * DS4_N_EMBD * sizeof(ffn_cur[0]));
+ 18437:     float *norm = xmalloc((size_t)n_tok * DS4_N_EMBD * sizeof(norm[0]));
+ 18438:     float *moe = xmalloc((size_t)n_tok * DS4_N_EMBD * sizeof(moe[0]));
+ 18439:     float *shared = xmalloc((size_t)n_tok * DS4_N_EMBD * sizeof(shared[0]));
+ 18440:     float *post = xmalloc((size_t)n_tok * n_hc * sizeof(post[0]));
+ 18441:     float *comb = xmalloc((size_t)n_tok * n_hc * n_hc * sizeof(comb[0]));
+ 18442:     const uint64_t expert_in_dim = layer->ffn_gate_exps->dim[0];
+ 18443:     const uint64_t down_in_dim = layer->ffn_down_exps->dim[0];
+ 18444:     const bool routed_q8_0 =
+
+==============================================================================================================
+SOURCE LINES 18591-18641
+==============================================================================================================
+ 18591:         float             * out_hc,
+ 18592:         const ds4_model   * model,
+ 18593:         const ds4_layer_weights * layer,
+ 18594:         const float       * inp_hc,
+ 18595:         const int         * token_ids,
+ 18596:         uint32_t            n_tok,
+ 18597:         uint32_t            il,
+ 18598:         const float       * steering_dirs,
+ 18599:         float               steering_scale) {
+ 18600:     layer_ffn_tokens_ctx ctx = {
+ 18601:         .out_hc = out_hc,
+ 18602:         .model = model,
+ 18603:         .layer = layer,
+ 18604:         .inp_hc = inp_hc,
+ 18605:         .token_ids = token_ids,
+ 18606:         .steering_dirs = steering_dirs,
+ 18607:         .steering_scale = steering_scale,
+ 18608:         .hc_dim = (uint64_t)DS4_N_HC * DS4_N_EMBD,
+ 18609:         .il = il,
+ 18610:     };
+ 18611:     ds4_parallel_for(n_tok, layer_ffn_tokens_worker, &ctx);
+ 18612: }
+ 18613: 
+ 18614: static void output_logits_one(
+ 18615:         float             * logits,
+ 18616:         const ds4_model   * model,
+ 18617:         const ds4_weights * weights,
+ 18618:         const float       * inp_hc);
+ 18619: 
+ 18620: /* =========================================================================
+ 18621:  * KV Cache, Compressors, and CPU Layer Execution.
+ 18622:  * =========================================================================
+ 18623:  *
+ 18624:  * The CPU path is the correctness reference.  It maintains raw SWA KV rows,
+ 18625:  * optional compressed KV rows, the indexer mask for ratio-4 layers, and a
+ 18626:  * reusable decode scratch arena so token generation does not allocate in the
+ 18627:  * hot loop.
+ 18628:  */
+ 18629: 
+ 18630: typedef struct {
+ 18631:     float *raw_kv;
+ 18632:     uint32_t n_raw;
+ 18633:     uint32_t cap_raw;
+ 18634: 
+ 18635:     uint32_t compress_ratio;
+ 18636:     uint32_t comp_cap;
+ 18637:     uint32_t n_comp;
+ 18638:     float *attn_comp_kv;
+ 18639:     float *attn_state_kv;
+ 18640:     float *attn_state_score;
+ 18641: 
+
+==============================================================================================================
+SOURCE LINES 19419-19469
+==============================================================================================================
+ 19419:         const uint32_t          * comp_counts,
+ 19420:         const uint8_t           * allowed_mask,
+ 19421:         const uint8_t           * allowed_bits,
+ 19422:         uint64_t                  allowed_stride,
+ 19423:         uint32_t                  n_tok,
+ 19424:         uint32_t                  raw_cap) {
+ 19425:     layer_attention_prefix_batch_ctx ctx = {
+ 19426:         .out_heads = out_heads,
+ 19427:         .model = model,
+ 19428:         .layer = layer,
+ 19429:         .q = q,
+ 19430:         .raw_kv = raw_kv,
+ 19431:         .comp_kv = comp_kv,
+ 19432:         .comp_counts = comp_counts,
+ 19433:         .allowed_mask = allowed_mask,
+ 19434:         .allowed_bits = allowed_bits,
+ 19435:         .allowed_stride = allowed_stride,
+ 19436:         .n_tok = n_tok,
+ 19437:         .raw_cap = raw_cap,
+ 19438:     };
+ 19439:     ds4_parallel_for_min_rows((uint64_t)n_tok * DS4_N_HEAD,
+ 19440:                               layer_attention_prefix_batch_worker,
+ 19441:                               &ctx,
+ 19442:                               1);
+ 19443: }
+ 19444: 
+ 19445: /* Ratio-4 layers use an auxiliary indexer to select which compressed rows are
+ 19446:  * visible to attention.  This is the CPU allocation-owning helper. */
+ 19447: static bool *indexer_allowed_decode_one(
+ 19448:         const ds4_model         * model,
+ 19449:         const ds4_layer_weights * layer,
+ 19450:         const float             * cur,
+ 19451:         const float             * qr_norm,
+ 19452:         const float             * index_comp,
+ 19453:         uint32_t                  n_comp,
+ 19454:         uint32_t                  il,
+ 19455:         uint32_t                  pos) {
+ 19456:     if (n_comp == 0) return NULL;
+ 19457: 
+ 19458:     bool *allowed = xcalloc(n_comp, sizeof(allowed[0]));
+ 19459:     const uint32_t top_k = DS4_N_INDEXER_TOP_K < n_comp ? DS4_N_INDEXER_TOP_K : n_comp;
+ 19460:     if (top_k == n_comp) {
+ 19461:         for (uint32_t i = 0; i < n_comp; i++) allowed[i] = true;
+ 19462:         return allowed;
+ 19463:     }
+ 19464: 
+ 19465:     const uint32_t head_dim = DS4_N_INDEXER_HEAD_DIM;
+ 19466:     const uint32_t n_head = DS4_N_INDEXER_HEAD;
+ 19467:     float *q = xmalloc((size_t)head_dim * n_head * sizeof(q[0]));
+ 19468:     float *weights = xmalloc((size_t)n_head * sizeof(weights[0]));
+ 19469:     float *scores = xmalloc((size_t)n_comp * sizeof(scores[0]));
+
+==============================================================================================================
+SOURCE LINES 21975-22028
+==============================================================================================================
+ 21975:             gate_out0 = gate_out;
+ 21976:             down_in0 = down_in;
+ 21977:             down_out0 = down_out;
+ 21978:         } else if (gate_in != gate_in0 || gate_out != gate_out0 ||
+ 21979:                    down_in != down_in0 || down_out != down_out0) {
+ 21980:             ds4_die("GLM F32 routed-MoE reference expert layouts are not uniform");
+ 21981:         }
+ 21982:         mid_ctx.expert_weight[slot] = expert_weight[slot];
+ 21983:     }
+ 21984: 
+ 21985:     if (gate_in0 != DS4_N_EMBD || gate_in0 % QK_K != 0 ||
+ 21986:         down_in0 != DS4_N_FF_EXP || down_in0 % QK_K != 0 ||
+ 21987:         gate_out0 != DS4_N_FF_EXP || down_out0 != DS4_N_EMBD) {
+ 21988:         ds4_die("GLM F32 routed-MoE reference found unexpected GLM expert dimensions");
+ 21989:     }
+ 21990: 
+ 21991:     mid_ctx.in_dim = gate_in0;
+ 21992:     mid_ctx.out_dim = gate_out0;
+ 21993:     down_ctx.in_dim = down_in0;
+ 21994:     down_ctx.out_dim = down_out0;
+ 21995:     ds4_parallel_for((uint64_t)DS4_N_EXPERT_USED * gate_out0,
+ 21996:                      glm_routed_moe_f32_mid_worker,
+ 21997:                      &mid_ctx);
+ 21998:     ds4_parallel_for(down_out0, glm_routed_moe_f32_down_worker, &down_ctx);
+ 21999: }
+ 22000: 
+ 22001: static void layer_glm_shared_ffn_one_f32_ref(
+ 22002:         float                   *out,
+ 22003:         const ds4_model         *model,
+ 22004:         const ds4_layer_weights *layer,
+ 22005:         const float             *x) {
+ 22006:     const uint64_t in_dim = layer->ffn_gate_shexp ? layer->ffn_gate_shexp->dim[0] : 0;
+ 22007:     const uint64_t hidden = layer->ffn_gate_shexp ? layer->ffn_gate_shexp->dim[1] : 0;
+ 22008:     if (!layer->ffn_gate_shexp ||
+ 22009:         !layer->ffn_up_shexp ||
+ 22010:         !layer->ffn_down_shexp ||
+ 22011:         layer->ffn_gate_shexp->type != DS4_TENSOR_Q8_0 ||
+ 22012:         layer->ffn_up_shexp->type != DS4_TENSOR_Q8_0 ||
+ 22013:         layer->ffn_down_shexp->type != DS4_TENSOR_Q8_0 ||
+ 22014:         layer->ffn_up_shexp->dim[0] != in_dim ||
+ 22015:         layer->ffn_up_shexp->dim[1] != hidden ||
+ 22016:         layer->ffn_down_shexp->dim[0] != hidden ||
+ 22017:         layer->ffn_down_shexp->dim[1] != DS4_N_EMBD ||
+ 22018:         in_dim != DS4_N_EMBD ||
+ 22019:         hidden != DS4_N_FF_EXP) {
+ 22020:         ds4_die("GLM F32 shared expert reference found unexpected tensor layout");
+ 22021:     }
+ 22022: 
+ 22023:     float *gate = xmalloc((size_t)hidden * sizeof(gate[0]));
+ 22024:     float *up = xmalloc((size_t)hidden * sizeof(up[0]));
+ 22025:     float *mid = xmalloc((size_t)hidden * sizeof(mid[0]));
+ 22026: 
+ 22027:     matvec_q8_0_f32_ref(gate, model, layer->ffn_gate_shexp, x);
+ 22028:     matvec_q8_0_f32_ref(up, model, layer->ffn_up_shexp, x);
+
+==============================================================================================================
+SOURCE LINES 40011-40079
+==============================================================================================================
+ 40011: 
+ 40012:     const uint64_t in_dim = w->dim[0];
+ 40013:     const uint64_t out_dim = w->dim[1];
+ 40014:     const uint64_t blocks = (in_dim + 31u) / 32u;
+ 40015:     if (out_dim == 0 ||
+ 40016:         blocks == 0 ||
+ 40017:         blocks > (uint64_t)SIZE_MAX / 32u ||
+ 40018:         blocks > (uint64_t)SIZE_MAX / sizeof(float)) {
+ 40019:         return false;
+ 40020:     }
+ 40021: 
+ 40022:     enum { DSPARK_MARKOV_ARGMAX_STACK_BLOCKS = 32 };
+ 40023:     int8_t xq_stack[DSPARK_MARKOV_ARGMAX_STACK_BLOCKS * 32u];
+ 40024:     float xscale_stack[DSPARK_MARKOV_ARGMAX_STACK_BLOCKS];
+ 40025:     const bool use_stack = blocks <= DSPARK_MARKOV_ARGMAX_STACK_BLOCKS;
+ 40026:     int8_t *xq = use_stack ? xq_stack : xmalloc((size_t)blocks * 32u);
+ 40027:     float *xscale = use_stack ? xscale_stack :
+ 40028:         xmalloc((size_t)blocks * sizeof(xscale[0]));
+ 40029:     quantize_q8_0_activation(state, xq, xscale, in_dim);
+ 40030: 
+ 40031:     ds4_threads_init();
+ 40032:     const uint32_t n_slots =
+ 40033:         g_pool.n_threads == 0 ? 1u : g_pool.n_threads;
+ 40034:     const uint64_t rows_per_slot = (out_dim + n_slots - 1u) / n_slots;
+ 40035:     dspark_markov_q8_0_argmax_ctx ctx = {
+ 40036:         .data = tensor_data(model, w),
+ 40037:         .xq = xq,
+ 40038:         .xscale = xscale,
+ 40039:         .logits = logits,
+ 40040:         .in_dim = in_dim,
+ 40041:         .blocks = blocks,
+ 40042:         .rows_per_slot = rows_per_slot,
+ 40043:     };
+ 40044:     for (uint32_t i = 0; i < DS4_MAX_THREADS; i++) {
+ 40045:         ctx.best_idx[i] = 0;
+ 40046:         ctx.best_val[i] = -FLT_MAX;
+ 40047:     }
+ 40048: 
+ 40049:     ds4_parallel_for(out_dim, dspark_markov_q8_0_argmax_worker, &ctx);
+ 40050: 
+ 40051:     uint32_t best = 0;
+ 40052:     float best_v = -FLT_MAX;
+ 40053:     for (uint32_t slot = 0; slot < n_slots && slot < DS4_MAX_THREADS; slot++) {
+ 40054:         const uint64_t row0 = (uint64_t)slot * rows_per_slot;
+ 40055:         if (row0 >= out_dim) break;
+ 40056:         if (ctx.best_val[slot] > best_v) {
+ 40057:             best_v = ctx.best_val[slot];
+ 40058:             best = ctx.best_idx[slot];
+ 40059:         }
+ 40060:     }
+ 40061: 
+ 40062:     if (!use_stack) {
+ 40063:         free(xscale);
+ 40064:         free(xq);
+ 40065:     }
+ 40066:     *token_out = best;
+ 40067:     return true;
+ 40068: }
+ 40069: 
+ 40070: /* Exact target verification preserves correctness when this diagnostic mode
+ 40071:  * proposes directly from the support model's base logits. */
+ 40072: static bool dspark_markov_bias_disabled(void) {
+ 40073:     static int cached = -1;
+ 40074:     if (cached < 0) {
+ 40075:         const char *env = getenv("DS4_DSPARK_NO_MARKOV");
+ 40076:         cached = (env && env[0] && strcmp(env, "0") != 0) ? 1 : 0;
+ 40077:     }
+ 40078:     return cached == 1;
+ 40079: }
+
+==============================================================================================================
+SOURCE LINES 64923-64973
+==============================================================================================================
+ 64923:                     "ds4: --dspark is not yet compatible with distributed "
+ 64924:                     "inference\n");
+ 64925:             free(e);
+ 64926:             *out = NULL;
+ 64927:             return 1;
+ 64928:         }
+ 64929:     }
+ 64930:     if ((opt->directional_steering_attn != 0.0f || opt->directional_steering_ffn != 0.0f) &&
+ 64931:         (!opt->directional_steering_file || !opt->directional_steering_file[0]))
+ 64932:     {
+ 64933:         fprintf(stderr, "ds4: directional steering needs --dir-steering-file\n");
+ 64934:         free(e);
+ 64935:         *out = NULL;
+ 64936:         return 1;
+ 64937:     }
+ 64938:     if (opt->directional_steering_file && opt->directional_steering_file[0]) {
+ 64939:         e->directional_steering_file = ds4_strdup(opt->directional_steering_file);
+ 64940:         e->directional_steering_attn_scale = opt->directional_steering_attn;
+ 64941:         e->directional_steering_ffn_scale = opt->directional_steering_ffn;
+ 64942:     }
+ 64943:     if (opt->n_threads > 0) g_requested_threads = (uint32_t)opt->n_threads;
+ 64944:     e->placement_ctx_hint = opt->placement_ctx_hint;
+ 64945:     e->placement_session_count_hint = opt->placement_session_count_hint;
+ 64946:     e->share_session_prefill_workspace = opt->share_session_prefill_workspace;
+ 64947:     ds4_acquire_instance_lock();
+ 64948: 
+ 64949:     if (opt->simulate_used_memory_bytes != 0 &&
+ 64950:         !ds4_ssd_memory_lock_acquire(&e->simulated_memory,
+ 64951:                                      opt->simulate_used_memory_bytes)) {
+ 64952:         ds4_engine_close(e);
+ 64953:         *out = NULL;
+ 64954:         return 1;
+ 64955:     }
+ 64956: 
+ 64957:     bool load_slice = opt->load_slice;
+ 64958:     uint32_t load_layer_start = opt->load_layer_start;
+ 64959:     uint32_t load_layer_end = opt->load_layer_end;
+ 64960:     bool load_output = opt->load_output;
+ 64961:     bool load_output_optional = false;
+ 64962:     if (opt->distributed.role != DS4_DISTRIBUTED_NONE &&
+ 64963:         opt->distributed.layers.set)
+ 64964:     {
+ 64965:         load_slice = true;
+ 64966:         load_layer_start = opt->distributed.layers.start;
+ 64967:         load_layer_end = opt->distributed.layers.end;
+ 64968:         load_output = opt->distributed.layers.has_output;
+ 64969:         /* A coordinator may need to apply the output head locally when the
+ 64970:          * last worker advertises N:M rather than N:output. Bind it when the
+ 64971:          * local GGUF contains it, without requiring split GGUFs to do so. */
+ 64972:         load_output_optional =
+ 64973:             opt->distributed.role == DS4_DISTRIBUTED_COORDINATOR;

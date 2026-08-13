@@ -1,0 +1,10 @@
+1969:#define DS4_MAX_THREADS 32
+1972:    pthread_t threads[DS4_MAX_THREADS];
+1987:static ds4_thread_pool g_pool;
+1989:static uint32_t g_requested_threads;
+2050:    if (n_threads > DS4_MAX_THREADS) n_threads = DS4_MAX_THREADS;
+39966:    uint32_t best_idx[DS4_MAX_THREADS];
+39967:    float best_val[DS4_MAX_THREADS];
+39976:    if (slot >= DS4_MAX_THREADS) slot = DS4_MAX_THREADS - 1u;
+40044:    for (uint32_t i = 0; i < DS4_MAX_THREADS; i++) {
+40053:    for (uint32_t slot = 0; slot < n_slots && slot < DS4_MAX_THREADS; slot++) {

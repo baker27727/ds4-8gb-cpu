@@ -1,0 +1,189 @@
+1383:     * of first-touch faults into generation. On Darwin we have observed this end
+1976:    uint32_t n_threads;
+1978:    uint32_t generation;
+1985:} ds4_thread_pool;
+1987:static ds4_thread_pool g_pool;
+1989:static uint32_t g_requested_threads;
+1991:static void *ds4_worker_main(void *arg) {
+1993:    uint32_t seen_generation = 0;
+1996:        pthread_mutex_lock(&g_pool.mutex);
+1997:        while (seen_generation == g_pool.generation && !g_pool.shutdown) {
+1998:            pthread_cond_wait(&g_pool.work_cond, &g_pool.mutex);
+2000:        if (g_pool.shutdown) {
+2001:            pthread_mutex_unlock(&g_pool.mutex);
+2005:        seen_generation = g_pool.generation;
+2006:        ds4_parallel_fn fn = g_pool.fn;
+2007:        void *ctx = g_pool.ctx;
+2008:        const uint64_t n_rows = g_pool.n_rows;
+2009:        const uint32_t n_threads = g_pool.n_threads;
+2010:        pthread_mutex_unlock(&g_pool.mutex);
+2012:        const uint64_t rows_per_thread = (n_rows + n_threads - 1) / n_threads;
+2022:        pthread_mutex_lock(&g_pool.mutex);
+2023:        g_pool.done++;
+2024:        if (g_pool.done == g_pool.n_workers) {
+2025:            pthread_cond_signal(&g_pool.done_cond);
+2027:        pthread_mutex_unlock(&g_pool.mutex);
+2033:static void ds4_threads_init(void) {
+2034:    if (g_pool.initialized) return;
+2038:    uint32_t n_threads = 12;
+2041:        n_threads = online_cpus < 12 ? (uint32_t)online_cpus : 12;
+2047:        if (v > 0) n_threads = (uint32_t)v;
+2049:    if (g_requested_threads > 0) n_threads = g_requested_threads;
+2050:    if (n_threads > DS4_MAX_THREADS) n_threads = DS4_MAX_THREADS;
+2051:    if (n_threads == 0) n_threads = 1;
+2053:    pthread_mutex_init(&g_pool.mutex, NULL);
+2054:    pthread_cond_init(&g_pool.work_cond, NULL);
+2055:    pthread_cond_init(&g_pool.done_cond, NULL);
+2056:    g_pool.n_threads = n_threads;
+2057:    g_pool.n_workers = n_threads > 0 ? n_threads - 1 : 0;
+2058:    g_pool.generation = 0;
+2059:    g_pool.done = 0;
+2060:    g_pool.shutdown = false;
+2061:    g_pool.initialized = true;
+2063:    for (uint32_t i = 1; i < n_threads; i++) {
+2064:        if (pthread_create(&g_pool.threads[i], NULL, ds4_worker_main, (void *)(uintptr_t)i) != 0) {
+2070:static void ds4_threads_shutdown(void) {
+2071:    if (!g_pool.initialized) return;
+2073:    pthread_mutex_lock(&g_pool.mutex);
+2074:    g_pool.shutdown = true;
+2075:    g_pool.generation++;
+2076:    pthread_cond_broadcast(&g_pool.work_cond);
+2077:    pthread_mutex_unlock(&g_pool.mutex);
+2079:    for (uint32_t i = 1; i < g_pool.n_threads; i++) {
+2080:        pthread_join(g_pool.threads[i], NULL);
+2083:    pthread_cond_destroy(&g_pool.done_cond);
+2084:    pthread_cond_destroy(&g_pool.work_cond);
+2085:    pthread_mutex_destroy(&g_pool.mutex);
+2086:    memset(&g_pool, 0, sizeof(g_pool));
+2092:    ds4_threads_init();
+2094:    if (g_parallel_depth > 0 || g_pool.n_threads <= 1 || n_rows < min_parallel_rows) {
+2099:    pthread_mutex_lock(&g_pool.mutex);
+2100:    g_pool.fn = fn;
+2101:    g_pool.ctx = ctx;
+2102:    g_pool.n_rows = n_rows;
+2103:    g_pool.done = 0;
+2104:    g_pool.generation++;
+2105:    pthread_cond_broadcast(&g_pool.work_cond);
+2107:    const uint64_t rows_per_thread = (n_rows + g_pool.n_threads - 1) / g_pool.n_threads;
+2110:    pthread_mutex_unlock(&g_pool.mutex);
+2118:    pthread_mutex_lock(&g_pool.mutex);
+2119:    while (g_pool.done < g_pool.n_workers) {
+2120:        pthread_cond_wait(&g_pool.done_cond, &g_pool.mutex);
+2122:    pthread_mutex_unlock(&g_pool.mutex);
+2537:     * CPU generation touches expert weights according to router decisions, so a
+2542:     * mapping into the page cache before token generation reaches it.
+3283:/* Optional startup pass that touches tensor pages before timing generation. */
+7876:/* Decode scratch owns this temporary activation quantization so generation
+13502:    int         pending;
+13862:                if (slot->pending > 0) {
+13863:                    slot->pending--;
+13868:                slot->pending == 0) {
+14093:                "pending=%d "
+14103:                slot->pending,
+14111:        if (slot->pending == 0) {
+14364:    slot->pending =
+14477:     * Mark only the accepted prefix as pending.
+14489:            slot->pending++;
+14506:            " pending=%d\n",
+14511:            slot->pending);
+14723:            "pending=%d elapsed_ms=%.3f "
+14739:            slot->pending,
+14904:    slot->pending =
+15002:            slot->pending++;
+15019:            "ops=%ld pending=%d "
+15027:            slot->pending,
+15106:                "pending=%d "
+15116:                slot->pending,
+15177:        if (slot->pending == 0) {
+15190:                "pending=%d "
+15200:                slot->pending,
+15472:    slot->pending =
+15633:            slot->pending++;
+15675:            "pending=%d "
+15727:            slot->pending,
+15879:                "pending=%d "
+15892:                slot->pending,
+16083:    if (slot->pending == 0) {
+16097:            "pending=%d "
+16111:            slot->pending,
+18418: * experts can run either token-parallel or expert-grouped depending on size. */
+18626: * reusable decode scratch arena so token generation does not allocate in the
+18694:/* Allocate all CPU decode temporaries once.  This keeps generation deterministic
+18717:     * Keep decode scratch resident for the whole generation instead.
+25124:    uint32_t n_threads;
+25591:                    "%u but pending job is layer %u\n",
+25986:static void *metal_graph_stream_pagein_worker_main(void *arg) {
+26012:static uint32_t metal_graph_stream_prefill_layer_pagein_threads(void) {
+26039:    if (!env || !env[0]) return metal_graph_stream_prefill_layer_pagein_threads();
+26226:    job->n_threads = metal_graph_stream_prefill_selected_prepare_threads(madvise_only);
+26227:    if (job->n_threads <= 1) {
+26241:        job->threads = xcalloc(job->n_threads, sizeof(job->threads[0]));
+26242:        job->workers = xcalloc(job->n_threads, sizeof(job->workers[0]));
+26243:        for (uint32_t t = 0; t < job->n_threads; t++) {
+26246:            job->workers[t].stride = job->n_threads;
+26249:                                          metal_graph_stream_pagein_worker_main,
+26276:    if (job->n_threads <= 1) {
+26283:        for (uint32_t t = 0; t < job->n_threads; t++) {
+26401:    const uint32_t n_threads =
+26402:        metal_graph_stream_prefill_layer_pagein_threads();
+26409:        xmalloc((size_t)spans.len * n_threads * sizeof(ranges[0]));
+26415:        uint64_t chunk = size / n_threads;
+26418:        for (uint32_t t = 0; t < n_threads && consumed < size; t++) {
+26420:                (t + 1u == n_threads || size - consumed <= chunk) ?
+26440:    job->n_threads = n_threads;
+26441:    if (n_threads == 1) {
+26455:        job->threads = xcalloc(n_threads, sizeof(job->threads[0]));
+26456:        job->workers = xcalloc(n_threads, sizeof(job->workers[0]));
+26457:        for (uint32_t t = 0; t < n_threads; t++) {
+26460:            job->workers[t].stride = n_threads;
+26463:                                          metal_graph_stream_pagein_worker_main,
+26490:    if (job->n_threads <= 1) {
+26497:        for (uint32_t t = 0; t < job->n_threads; t++) {
+26527:                job->n_threads ? job->n_threads : 1u,
+27130: * The normal generation path uses the fused helpers below.  The older unfused
+27569: * layer path; diagnostics reuse it so they compare exactly what generation
+28790:static void *metal_graph_selected_async_load_worker_main(void *arg) {
+28828:                                  metal_graph_selected_async_load_worker_main,
+28994:static void *rocm_graph_batch_selected_async_load_worker_main(void *arg) {
+29026:                                  rocm_graph_batch_selected_async_load_worker_main,
+33111: * Metal tensors back.  They are not part of generation; command-line tests use
+33757: * flow and their CPU reads stay outside these generation entry points.
+34239:/* Encode a full single-token decode step on Metal.  This is the generation
+40031:    ds4_threads_init();
+40033:        g_pool.n_threads == 0 ? 1u : g_pool.n_threads;
+41784:        !ds4_gpu_stream_expert_cache_finish_pending_batch()) {
+41907:     * caller observe the pending interrupt at generation time instead. */
+45256: * marker, and either <think> or </think> depending on the requested mode.  Max
+45619:static bool vocab_token_is_generation_stop(const ds4_vocab *vocab, int token) {
+45636:    return e ? vocab_token_is_generation_stop(&e->vocab, token) : false;
+46134:/* CPU generation entry point.  It runs layer-major prefill once, then decodes
+46147:        ds4_generation_done_fn done,
+46153:    fprintf(stderr, "ds4: using CPU generation with layer-major prefill\n");
+46263:        if (vocab_token_is_generation_stop(vocab, token)) break;
+46471:            "ds4: prefill: %.2f t/s, generation: %.2f t/s\n",
+47608:                    "layer %u but pending job is layer %u\n",
+55775:        ds4_generation_done_fn done,
+55777:    fprintf(stderr, "ds4: using GLM Metal first-token generation path\n");
+55781:                "ds4: GLM Metal generation currently supports exactly one prompt token; "
+55791:                "ds4: GLM Metal generation currently emits only the first generated token; "
+55808:    if (!vocab_token_is_generation_stop(vocab, token) && emit) emit(emit_ud, token);
+55835:        ds4_generation_done_fn done,
+55839:    fprintf(stderr, "ds4: using GLM full-attention argmax generation path\n");
+55963:        if (vocab_token_is_generation_stop(vocab, token)) break;
+55998:            "ds4: GLM prefill: %.2f t/s, generation: %.2f t/s\n",
+56008:/* Metal generation entry point.  The model runs as one local whole-graph
+56030:        ds4_generation_done_fn done,
+56034:    fprintf(stderr, "ds4: using GPU graph generation with graph prefill\n");
+56157:        if (vocab_token_is_generation_stop(vocab, token)) break;
+56189:            "ds4: prefill: %.2f t/s, generation: %.2f t/s\n",
+60786:        ds4_generation_done_fn done,
+60797:            fprintf(stderr, "ds4: %s generation requested but the graph backend is unavailable\n",
+60851:                    "ds4: prefill: %.2f t/s, generation: %.2f t/s\n",
+60872:        fprintf(stderr, "ds4: %s generation requested but this build has no graph backend support\n",
+64943:    if (opt->n_threads > 0) g_requested_threads = (uint32_t)opt->n_threads;
+66204:    ds4_threads_shutdown();
+66928: * pending draft exists verify [first_token, draft] in one 2-row batch pass
+67733:                 "prompt length %d exceeds context %d (one token of generation room is required)",
+68571:                 "prompt length %d exceeds context %d (one token of generation room is required)",
+69251:                    "ds4: DSpark proposer pending token=%d pos=%u capture=%s "
+70601:     * ordinary decode, but every later proposal is outside the generation. */

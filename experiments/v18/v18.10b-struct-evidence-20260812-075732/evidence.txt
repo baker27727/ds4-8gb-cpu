@@ -1,0 +1,1670 @@
+V18.10B EXACT SOURCE EVIDENCE
+source_sha256=97039259f83c8d10c847ce47a786d7e8f7fc4dcc4e52c089ed751a02e79db76c
+
+==============================================================================
+V19 AIO MACROS
+==============================================================================
+ 13373: #define V19_AIO_ALIGN       4096u
+ 13374: #define V19_AIO_SLOTS       2
+ 13375: #define V19_AIO_MAX_PRED    3
+ 13376: #define V19_AIO_OPS_PER_PRED 2
+ 13377: #define V19_AIO_MAX_OPS \
+ 13378:     (V19_AIO_MAX_PRED * V19_AIO_OPS_PER_PRED)
+ 13422:     int         predicted[V19_AIO_MAX_PRED];
+ 13429:     v19_aio_op  op[V19_AIO_MAX_OPS];
+ 13440:     v19_aio_slot  slot[V19_AIO_SLOTS];
+ 13472:         getenv("DS4_CPU_V19_AIO_PROBE");
+ 13481:         getenv("DS4_CPU_V19_AIO_TRACE");
+ 13490:         getenv("DS4_CPU_V19_AIO_CONSUME");
+ 13499:         getenv("DS4_CPU_V19_AIO_CONSUME_VERIFY");
+ 13508:         getenv("DS4_CPU_V19_AIO_CONSUME_TRACE");
+ 13518:         getenv("DS4_CPU_V19_AIO_BUDGET");
+ 13527:     if (n > V19_AIO_MAX_PRED) {
+ 13528:         n = V19_AIO_MAX_PRED;
+ 13584:         ~((uint64_t)V19_AIO_ALIGN - 1u);
+ 13591:         V19_AIO_ALIGN;
+ 13699:          s < V19_AIO_SLOTS;
+ 13706:              i < V19_AIO_MAX_OPS;
+ 13842:          s < V19_AIO_SLOTS;
+ 13933:          s < V19_AIO_SLOTS;
+ 14138:                 V19_AIO_ALIGN,
+ 14219:          s < V19_AIO_SLOTS;
+ 14293:          i < V19_AIO_MAX_PRED;
+ 14303:         V19_AIO_MAX_OPS];
+ 14454:          s < V19_AIO_SLOTS;
+ 14701:         getenv("DS4_CPU_V19_DOWN_AIO");
+ 14712:         getenv("DS4_CPU_V19_DOWN_CONSUME");
+ 14723:         getenv("DS4_CPU_V19_DOWN_TRACE");
+ 14734:         getenv("DS4_CPU_V19_DOWN_BUDGET");
+ 14833:         V19_AIO_MAX_OPS];
+ 14841:         if (n >= V19_AIO_MAX_OPS) {
+ 14973:          s < V19_AIO_SLOTS;
+ 15061:          s < V19_AIO_SLOTS;
+
+==============================================================================
+ALL V19 AIO TYPEDEF LOCATIONS
+==============================================================================
+ 13392: v19_aio_op
+ 13414: v19_aio_slot
+ 13432: v19_aio_state
+
+==============================================================================
+STRUCT v19_aio_op
+==============================================================================
+ 13392: typedef struct v19_aio_op {
+ 13393:     struct iocb cb;
+ 13394: 
+ 13395:     void       *buf;
+ 13396:     size_t      cap;
+ 13397:     size_t      bytes;
+ 13398: 
+ 13399:     const ds4_tensor *tensor;
+ 13400:     int               expert;
+ 13401: 
+ 13402:     size_t      data_prefix;
+ 13403:     uint64_t    expert_bytes;
+ 13404: 
+ 13405:     int         pred_index;
+ 13406:     int         tensor_kind; /* 0 = Gate, 1 = Up */
+ 13407: 
+ 13408:     bool        submitted;
+ 13409:     bool        done;
+ 13410:     bool        ok;
+ 13411:     bool        consumed;
+ 13412: } v19_aio_op;
+
+==============================================================================
+STRUCT v19_aio_slot
+==============================================================================
+ 13414: typedef struct v19_aio_slot {
+ 13415:     bool        active;
+ 13416:     bool        observed;
+ 13417:     bool        released;
+ 13418: 
+ 13419:     uint32_t    il;
+ 13420: 
+ 13421:     int         budget;
+ 13422:     int         predicted[V19_AIO_MAX_PRED];
+ 13423: 
+ 13424:     int         nops;
+ 13425:     int         pending;
+ 13426: 
+ 13427:     double      submit_sec;
+ 13428: 
+ 13429:     v19_aio_op  op[V19_AIO_MAX_OPS];
+ 13430: } v19_aio_slot;
+
+==============================================================================
+STRUCT v19_aio_state
+==============================================================================
+ 13432: typedef struct v19_aio_state {
+ 13433:     bool          init_attempted;
+ 13434:     bool          ready;
+ 13435: 
+ 13436:     aio_context_t ctx;
+ 13437: 
+ 13438:     int           fd;
+ 13439: 
+ 13440:     v19_aio_slot  slot[V19_AIO_SLOTS];
+ 13441: 
+ 13442:     uint64_t      submit_batches;
+ 13443:     uint64_t      submit_ops;
+ 13444:     uint64_t      submit_bytes;
+ 13445: 
+ 13446:     uint64_t      completed_ops;
+ 13447:     uint64_t      completed_bytes;
+ 13448:     uint64_t      io_errors;
+ 13449: 
+ 13450:     uint64_t      no_slot;
+ 13451: 
+ 13452:     uint64_t      observations;
+ 13453: 
+ 13454:     uint64_t      predicted_hits;
+ 13455:     uint64_t      ready_pairs;
+ 13456:     uint64_t      useful_ready_pairs;
+ 13457: 
+ 13458:     uint64_t      any_useful_ready;
+ 13459: 
+ 13460:     uint64_t      consume_lookups;
+ 13461:     uint64_t      consume_hits;
+ 13462:     uint64_t      consume_bytes;
+ 13463:     uint64_t      consume_pairs;
+ 13464:     uint64_t      consume_layers;
+ 13465:     uint64_t      consume_verify_fail;
+ 13466: } v19_aio_state;
+
+==============================================================================
+FUNCTION cpu_v19_prepare_op
+==============================================================================
+ 14042: cpu_v19_prepare_op(
+ 14043:         v19_aio_op       *op,
+ 14044:         const ds4_model  *model,
+ 14045:         const ds4_tensor *tensor,
+ 14046:         int               expert,
+ 14047:         int               pred_index,
+ 14048:         int               tensor_kind) {
+ 14049: 
+ 14050:     if (!op ||
+ 14051:         !model ||
+ 14052:         !tensor ||
+ 14053:         expert < 0 ||
+ 14054:         expert >= (int)DS4_N_EXPERT) {
+ 14055: 
+ 14056:         return false;
+ 14057:     }
+ 14058: 
+ 14059:     uint64_t in_dim = 0;
+ 14060:     uint64_t out_dim = 0;
+ 14061:     uint64_t row_bytes = 0;
+ 14062: 
+ 14063:     g_v19_aio_prepare_bypass = true;
+ 14064: 
+ 14065:     const uint8_t *base =
+ 14066:         tensor_expert_bytes(
+ 14067:             model,
+ 14068:             tensor,
+ 14069:             (uint32_t)expert,
+ 14070:             &in_dim,
+ 14071:             &out_dim,
+ 14072:             &row_bytes);
+ 14073: 
+ 14074:     g_v19_aio_prepare_bypass = false;
+ 14075: 
+ 14076:     if (!base ||
+ 14077:         out_dim == 0 ||
+ 14078:         row_bytes == 0 ||
+ 14079:         out_dim >
+ 14080:             UINT64_MAX / row_bytes) {
+ 14081: 
+ 14082:         return false;
+ 14083:     }
+ 14084: 
+ 14085:     const uint64_t expert_bytes =
+ 14086:         out_dim * row_bytes;
+ 14087: 
+ 14088:     if (base < model->map) {
+ 14089:         return false;
+ 14090:     }
+ 14091: 
+ 14092:     const uint64_t logical_off =
+ 14093:         (uint64_t)(base - model->map);
+ 14094: 
+ 14095:     const uint64_t direct_off =
+ 14096:         cpu_v19_align_down(
+ 14097:             logical_off);
+ 14098: 
+ 14099:     const uint64_t prefix =
+ 14100:         logical_off - direct_off;
+ 14101: 
+ 14102:     if (expert_bytes >
+ 14103:         UINT64_MAX - prefix) {
+ 14104: 
+ 14105:         return false;
+ 14106:     }
+ 14107: 
+ 14108:     const uint64_t need =
+ 14109:         prefix + expert_bytes;
+ 14110: 
+ 14111:     const uint64_t direct_bytes =
+ 14112:         cpu_v19_align_up(need);
+ 14113: 
+ 14114:     if (direct_bytes == 0 ||
+ 14115:         direct_off >
+ 14116:             model->size ||
+ 14117:         direct_bytes >
+ 14118:             model->size - direct_off ||
+ 14119:         direct_bytes >
+ 14120:             (uint64_t)SIZE_MAX) {
+ 14121: 
+ 14122:         return false;
+ 14123:     }
+ 14124: 
+ 14125:     if (op->cap <
+ 14126:         (size_t)direct_bytes) {
+ 14127: 
+ 14128:         free(op->buf);
+ 14129: 
+ 14130:         op->buf = NULL;
+ 14131:         op->cap = 0;
+ 14132: 
+ 14133:         void *buf = NULL;
+ 14134: 
+ 14135:         const int rc =
+ 14136:             posix_memalign(
+ 14137:                 &buf,
+ 14138:                 V19_AIO_ALIGN,
+ 14139:                 (size_t)direct_bytes);
+ 14140: 
+ 14141:         if (rc != 0 ||
+ 14142:             !buf) {
+ 14143: 
+ 14144:             return false;
+ 14145:         }
+ 14146: 
+ 14147:         op->buf =
+ 14148:             buf;
+ 14149: 
+ 14150:         op->cap =
+ 14151:             (size_t)direct_bytes;
+ 14152:     }
+ 14153: 
+ 14154:     memset(
+ 14155:         &op->cb,
+ 14156:         0,
+ 14157:         sizeof(op->cb));
+ 14158: 
+ 14159:     op->bytes =
+ 14160:         (size_t)direct_bytes;
+ 14161: 
+ 14162:     op->tensor =
+ 14163:         tensor;
+ 14164: 
+ 14165:     op->expert =
+ 14166:         expert;
+ 14167: 
+ 14168:     op->data_prefix =
+ 14169:         (size_t)prefix;
+ 14170: 
+ 14171:     op->expert_bytes =
+ 14172:         expert_bytes;
+ 14173: 
+ 14174:     op->consumed =
+ 14175:         false;
+ 14176: 
+ 14177:     op->pred_index =
+ 14178:         pred_index;
+ 14179: 
+ 14180:     op->tensor_kind =
+ 14181:         tensor_kind;
+ 14182: 
+ 14183:     op->submitted =
+ 14184:         false;
+ 14185: 
+ 14186:     op->done =
+ 14187:         false;
+ 14188: 
+ 14189:     op->ok =
+ 14190:         false;
+ 14191: 
+ 14192:     op->cb.aio_data =
+ 14193:         (uint64_t)(uintptr_t)op;
+ 14194: 
+ 14195:     op->cb.aio_lio_opcode =
+ 14196:         IOCB_CMD_PREAD;
+ 14197: 
+ 14198:     op->cb.aio_fildes =
+ 14199:         (uint32_t)g_v19_aio.fd;
+ 14200: 
+ 14201:     op->cb.aio_buf =
+ 14202:         (uint64_t)(uintptr_t)op->buf;
+ 14203: 
+ 14204:     op->cb.aio_nbytes =
+ 14205:         direct_bytes;
+ 14206: 
+ 14207:     op->cb.aio_offset =
+ 14208:         (int64_t)direct_off;
+ 14209: 
+ 14210:     return true;
+ 14211: }
+
+==============================================================================
+FUNCTION cpu_v19_find_free_slot
+==============================================================================
+ 14214: cpu_v19_find_free_slot(void) {
+ 14215: 
+ 14216:     cpu_v19_aio_poll();
+ 14217: 
+ 14218:     for (int s = 0;
+ 14219:          s < V19_AIO_SLOTS;
+ 14220:          s++) {
+ 14221: 
+ 14222:         v19_aio_slot *slot =
+ 14223:             &g_v19_aio.slot[s];
+ 14224: 
+ 14225:         if (!slot->active) {
+ 14226:             return slot;
+ 14227:         }
+ 14228:     }
+ 14229: 
+ 14230:     return NULL;
+ 14231: }
+
+==============================================================================
+FUNCTION cpu_v19_aio_poll
+==============================================================================
+ 13720: cpu_v19_aio_poll(void) {
+ 13721:     if (!g_v19_aio.ready) {
+ 13722:         return;
+ 13723:     }
+ 13724: 
+ 13725:     for (;;) {
+ 13726: 
+ 13727:         struct io_event ev[16];
+ 13728: 
+ 13729:         struct timespec ts = {
+ 13730:             .tv_sec = 0,
+ 13731:             .tv_nsec = 0,
+ 13732:         };
+ 13733: 
+ 13734:         long n =
+ 13735:             cpu_v19_io_getevents(
+ 13736:                 g_v19_aio.ctx,
+ 13737:                 0,
+ 13738:                 16,
+ 13739:                 ev,
+ 13740:                 &ts);
+ 13741: 
+ 13742:         if (n <= 0) {
+ 13743:             break;
+ 13744:         }
+ 13745: 
+ 13746:         for (long i = 0;
+ 13747:              i < n;
+ 13748:              i++) {
+ 13749: 
+ 13750:             v19_aio_op *op =
+ 13751:                 (v19_aio_op *)
+ 13752:                 (uintptr_t)ev[i].data;
+ 13753: 
+ 13754:             if (!op) {
+ 13755:                 g_v19_aio.io_errors++;
+ 13756:                 continue;
+ 13757:             }
+ 13758: 
+ 13759:             v19_aio_slot *slot =
+ 13760:                 cpu_v19_slot_from_op(op);
+ 13761: 
+ 13762:             if (!slot) {
+ 13763:                 g_v19_aio.io_errors++;
+ 13764:                 continue;
+ 13765:             }
+ 13766: 
+ 13767:             if (op->submitted &&
+ 13768:                 !op->done) {
+ 13769: 
+ 13770:                 op->done = true;
+ 13771: 
+ 13772:                 op->ok =
+ 13773:                     ev[i].res ==
+ 13774:                     (int64_t)op->bytes;
+ 13775: 
+ 13776:                 if (op->ok) {
+ 13777:                     g_v19_aio.completed_ops++;
+ 13778: 
+ 13779:                     g_v19_aio.completed_bytes +=
+ 13780:                         op->bytes;
+ 13781:                 } else {
+ 13782:                     g_v19_aio.io_errors++;
+ 13783:                 }
+ 13784: 
+ 13785:                 if (slot->pending > 0) {
+ 13786:                     slot->pending--;
+ 13787:                 }
+ 13788:             }
+ 13789: 
+ 13790:             if (slot->released &&
+ 13791:                 slot->pending == 0) {
+ 13792: 
+ 13793:                 slot->active =
+ 13794:                     false;
+ 13795:             }
+ 13796:         }
+ 13797:     }
+ 13798: }
+
+==============================================================================
+FUNCTION cpu_v19_aio_submit_gu
+==============================================================================
+ 14233: cpu_v19_aio_submit_gu(
+ 14234:         const ds4_model          *model,
+ 14235:         const ds4_layer_weights  *layer,
+ 14236:         uint32_t                  il,
+ 14237:         const int predicted[
+ 14238:             DS4_MAX_EXPERT_USED]) {
+ 14239: 
+ 14240:     if (!cpu_v19_aio_enabled() ||
+ 14241:         !model ||
+ 14242:         !layer ||
+ 14243:         !predicted ||
+ 14244:         il >= DS4_MAX_LAYER ||
+ 14245:         layer->ffn_gate_tid2eid ||
+ 14246:         !layer->ffn_gate_exps ||
+ 14247:         !layer->ffn_up_exps) {
+ 14248: 
+ 14249:         return;
+ 14250:     }
+ 14251: 
+ 14252:     if (!cpu_v19_aio_open(model)) {
+ 14253:         return;
+ 14254:     }
+ 14255: 
+ 14256:     const int budget =
+ 14257:         cpu_v19_aio_budget();
+ 14258: 
+ 14259:     v19_aio_slot *slot =
+ 14260:         cpu_v19_find_free_slot();
+ 14261: 
+ 14262:     if (!slot) {
+ 14263:         g_v19_aio.no_slot++;
+ 14264: 
+ 14265:         return;
+ 14266:     }
+ 14267: 
+ 14268:     slot->active =
+ 14269:         true;
+ 14270: 
+ 14271:     slot->observed =
+ 14272:         false;
+ 14273: 
+ 14274:     slot->released =
+ 14275:         false;
+ 14276: 
+ 14277:     slot->il =
+ 14278:         il;
+ 14279: 
+ 14280:     slot->budget =
+ 14281:         budget;
+ 14282: 
+ 14283:     slot->nops =
+ 14284:         0;
+ 14285: 
+ 14286:     slot->pending =
+ 14287:         0;
+ 14288: 
+ 14289:     slot->submit_sec =
+ 14290:         now_sec();
+ 14291: 
+ 14292:     for (int i = 0;
+ 14293:          i < V19_AIO_MAX_PRED;
+ 14294:          i++) {
+ 14295: 
+ 14296:         slot->predicted[i] =
+ 14297:             i < budget
+ 14298:                 ? predicted[i]
+ 14299:                 : -1;
+ 14300:     }
+ 14301: 
+ 14302:     struct iocb *list[
+ 14303:         V19_AIO_MAX_OPS];
+ 14304: 
+ 14305:     int n = 0;
+ 14306: 
+ 14307:     for (int i = 0;
+ 14308:          i < budget;
+ 14309:          i++) {
+ 14310: 
+ 14311:         const int expert =
+ 14312:             predicted[i];
+ 14313: 
+ 14314:         if (expert < 0 ||
+ 14315:             expert >=
+ 14316:                 (int)DS4_N_EXPERT) {
+ 14317: 
+ 14318:             continue;
+ 14319:         }
+ 14320: 
+ 14321:         v19_aio_op *gate =
+ 14322:             &slot->op[n];
+ 14323: 
+ 14324:         if (!cpu_v19_prepare_op(
+ 14325:                 gate,
+ 14326:                 model,
+ 14327:                 layer->ffn_gate_exps,
+ 14328:                 expert,
+ 14329:                 i,
+ 14330:                 0)) {
+ 14331: 
+ 14332:             continue;
+ 14333:         }
+ 14334: 
+ 14335:         list[n] =
+ 14336:             &gate->cb;
+ 14337: 
+ 14338:         n++;
+ 14339: 
+ 14340:         v19_aio_op *up =
+ 14341:             &slot->op[n];
+ 14342: 
+ 14343:         if (!cpu_v19_prepare_op(
+ 14344:                 up,
+ 14345:                 model,
+ 14346:                 layer->ffn_up_exps,
+ 14347:                 expert,
+ 14348:                 i,
+ 14349:                 1)) {
+ 14350: 
+ 14351:             n--;
+ 14352:             continue;
+ 14353:         }
+ 14354: 
+ 14355:         list[n] =
+ 14356:             &up->cb;
+ 14357: 
+ 14358:         n++;
+ 14359:     }
+ 14360: 
+ 14361:     slot->nops =
+ 14362:         n;
+ 14363: 
+ 14364:     if (n == 0) {
+ 14365:         slot->active =
+ 14366:             false;
+ 14367: 
+ 14368:         return;
+ 14369:     }
+ 14370: 
+ 14371:     errno = 0;
+ 14372: 
+ 14373:     long submitted =
+ 14374:         cpu_v19_io_submit(
+ 14375:             g_v19_aio.ctx,
+ 14376:             n,
+ 14377:             list);
+ 14378: 
+ 14379:     if (submitted < 0) {
+ 14380:         g_v19_aio.io_errors++;
+ 14381: 
+ 14382:         slot->active =
+ 14383:             false;
+ 14384: 
+ 14385:         if (cpu_v19_aio_trace()) {
+ 14386:             fprintf(
+ 14387:                 stderr,
+ 14388:                 "ds4: v19 aio submit-fail "
+ 14389:                 "il=%u errno=%d\n",
+ 14390:                 (unsigned)il,
+ 14391:                 errno);
+ 14392:         }
+ 14393: 
+ 14394:         return;
+ 14395:     }
+ 14396: 
+ 14397:     /*
+ 14398:      * Native AIO may theoretically accept only part of a batch.
+ 14399:      * Mark only the accepted prefix as pending.
+ 14400:      */
+ 14401:     for (int i = 0;
+ 14402:          i < n;
+ 14403:          i++) {
+ 14404: 
+ 14405:         v19_aio_op *op =
+ 14406:             &slot->op[i];
+ 14407: 
+ 14408:         if (i < submitted) {
+ 14409:             op->submitted = true;
+ 14410: 
+ 14411:             slot->pending++;
+ 14412: 
+ 14413:             g_v19_aio.submit_ops++;
+ 14414: 
+ 14415:             g_v19_aio.submit_bytes +=
+ 14416:                 op->bytes;
+ 14417:         }
+ 14418:     }
+ 14419: 
+ 14420:     g_v19_aio.submit_batches++;
+ 14421: 
+ 14422:     if (cpu_v19_aio_trace()) {
+ 14423:         fprintf(
+ 14424:             stderr,
+ 14425:             "ds4: v19 aio submit "
+ 14426:             "il=%u budget=%d "
+ 14427:             "ops=%ld bytes_total=%" PRIu64
+ 14428:             " pending=%d\n",
+ 14429:             (unsigned)il,
+ 14430:             budget,
+ 14431:             submitted,
+ 14432:             g_v19_aio.submit_bytes,
+ 14433:             slot->pending);
+ 14434:     }
+ 14435: }
+
+==============================================================================
+FUNCTION cpu_v19_aio_observe
+==============================================================================
+ 14437: cpu_v19_aio_observe(
+ 14438:         uint32_t    il,
+ 14439:         const int  *actual_selected) {
+ 14440: 
+ 14441:     if (!cpu_v19_aio_enabled() ||
+ 14442:         !g_v19_aio.ready ||
+ 14443:         !actual_selected) {
+ 14444: 
+ 14445:         return;
+ 14446:     }
+ 14447: 
+ 14448:     cpu_v19_aio_poll();
+ 14449: 
+ 14450:     v19_aio_slot *slot =
+ 14451:         NULL;
+ 14452: 
+ 14453:     for (int s = 0;
+ 14454:          s < V19_AIO_SLOTS;
+ 14455:          s++) {
+ 14456: 
+ 14457:         if (g_v19_aio.slot[s].active &&
+ 14458:             g_v19_aio.slot[s].il == il) {
+ 14459: 
+ 14460:             slot =
+ 14461:                 &g_v19_aio.slot[s];
+ 14462: 
+ 14463:             break;
+ 14464:         }
+ 14465:     }
+ 14466: 
+ 14467:     if (!slot) {
+ 14468:         return;
+ 14469:     }
+ 14470: 
+ 14471:     slot->observed =
+ 14472:         true;
+ 14473: 
+ 14474:     /*
+ 14475:      * V18.10A_CROSS_TOKEN_REUSE_PROBE
+ 14476:      *
+ 14477:      * Read-only diagnostics.
+ 14478:      *
+ 14479:      * We already have both:
+ 14480:      *
+ 14481:      *   slot->predicted[]  = pre-attention speculative experts
+ 14482:      *   actual_selected[]  = canonical router experts
+ 14483:      *
+ 14484:      * Log them together so cross-token reuse can be simulated
+ 14485:      * offline without allocating a persistent expert cache.
+ 14486:      */
+ 14487:     {
+ 14488:         const char *v20_probe =
+ 14489:             getenv("DS4_CPU_V20_REUSE_PROBE");
+ 14490: 
+ 14491:         if (v20_probe &&
+ 14492:             v20_probe[0] &&
+ 14493:             strcmp(v20_probe, "0") != 0) {
+ 14494: 
+ 14495:             uint64_t gu_expert_bytes = 0;
+ 14496: 
+ 14497:             /*
+ 14498:              * Determine exact Gate+Up bytes for one expert.
+ 14499:              * pred_index 0 has one Gate op and one Up op.
+ 14500:              */
+ 14501:             for (int vi = 0;
+ 14502:                  vi < slot->nops;
+ 14503:                  vi++) {
+ 14504: 
+ 14505:                 const v19_aio_op *vop =
+ 14506:                     &slot->op[vi];
+ 14507: 
+ 14508:                 if (vop->pred_index != 0) {
+ 14509:                     continue;
+ 14510:                 }
+ 14511: 
+ 14512:                 if (vop->tensor_kind == 0 ||
+ 14513:                     vop->tensor_kind == 1) {
+ 14514: 
+ 14515:                     gu_expert_bytes +=
+ 14516:                         vop->expert_bytes;
+ 14517:                 }
+ 14518:             }
+ 14519: 
+ 14520:             fprintf(
+ 14521:                 stderr,
+ 14522:                 "ds4: v20 reuse "
+ 14523:                 "il=%u "
+ 14524:                 "pred=%d,%d "
+ 14525:                 "actual=%d,%d,%d,%d,%d,%d "
+ 14526:                 "gu_bytes=%" PRIu64 "\n",
+ 14527:                 (unsigned)il,
+ 14528:                 slot->budget > 0
+ 14529:                     ? slot->predicted[0]
+ 14530:                     : -1,
+ 14531:                 slot->budget > 1
+ 14532:                     ? slot->predicted[1]
+ 14533:                     : -1,
+ 14534:                 actual_selected[0],
+ 14535:                 actual_selected[1],
+ 14536:                 actual_selected[2],
+ 14537:                 actual_selected[3],
+ 14538:                 actual_selected[4],
+ 14539:                 actual_selected[5],
+ 14540:                 gu_expert_bytes);
+ 14541:         }
+ 14542:     }
+ 14543: 
+ 14544: 
+ 14545:     int pred_hits = 0;
+ 14546:     int ready = 0;
+ 14547:     int useful = 0;
+ 14548: 
+ 14549:     for (int p = 0;
+ 14550:          p < slot->budget;
+ 14551:          p++) {
+ 14552: 
+ 14553:         const int expert =
+ 14554:             slot->predicted[p];
+ 14555: 
+ 14556:         if (expert < 0) {
+ 14557:             continue;
+ 14558:         }
+ 14559: 
+ 14560:         bool hit = false;
+ 14561: 
+ 14562:         for (int k = 0;
+ 14563:              k < DS4_N_EXPERT_USED;
+ 14564:              k++) {
+ 14565: 
+ 14566:             if (actual_selected[k] ==
+ 14567:                 expert) {
+ 14568: 
+ 14569:                 hit = true;
+ 14570:                 break;
+ 14571:             }
+ 14572:         }
+ 14573: 
+ 14574:         bool gate_ok = false;
+ 14575:         bool up_ok = false;
+ 14576: 
+ 14577:         for (int i = 0;
+ 14578:              i < slot->nops;
+ 14579:              i++) {
+ 14580: 
+ 14581:             const v19_aio_op *op =
+ 14582:                 &slot->op[i];
+ 14583: 
+ 14584:             if (op->pred_index != p ||
+ 14585:                 !op->done ||
+ 14586:                 !op->ok) {
+ 14587: 
+ 14588:                 continue;
+ 14589:             }
+ 14590: 
+ 14591:             if (op->tensor_kind == 0) {
+ 14592:                 gate_ok = true;
+ 14593:             }
+ 14594: 
+ 14595:             if (op->tensor_kind == 1) {
+ 14596:                 up_ok = true;
+ 14597:             }
+ 14598:         }
+ 14599: 
+ 14600:         const bool pair_ready =
+ 14601:             gate_ok &&
+ 14602:             up_ok;
+ 14603: 
+ 14604:         if (hit) {
+ 14605:             pred_hits++;
+ 14606:         }
+ 14607: 
+ 14608:         if (pair_ready) {
+ 14609:             ready++;
+ 14610:         }
+ 14611: 
+ 14612:         if (hit && pair_ready) {
+ 14613:             useful++;
+ 14614:         }
+ 14615:     }
+ 14616: 
+ 14617:     g_v19_aio.observations++;
+ 14618: 
+ 14619:     g_v19_aio.predicted_hits +=
+ 14620:         (uint64_t)pred_hits;
+ 14621: 
+ 14622:     g_v19_aio.ready_pairs +=
+ 14623:         (uint64_t)ready;
+ 14624: 
+ 14625:     g_v19_aio.useful_ready_pairs +=
+ 14626:         (uint64_t)useful;
+ 14627: 
+ 14628:     if (useful > 0) {
+ 14629:         g_v19_aio.any_useful_ready++;
+ 14630:     }
+ 14631: 
+ 14632:     const double elapsed_ms =
+ 14633:         (now_sec() -
+ 14634:          slot->submit_sec) *
+ 14635:         1000.0;
+ 14636: 
+ 14637:     if (cpu_v19_aio_trace()) {
+ 14638: 
+ 14639:         fprintf(
+ 14640:             stderr,
+ 14641:             "ds4: v19 aio observe "
+ 14642:             "il=%u budget=%d "
+ 14643:             "pred=%d,%d,%d "
+ 14644:             "hit=%d ready=%d useful=%d "
+ 14645:             "pending=%d elapsed_ms=%.3f "
+ 14646:             "obs=%" PRIu64 " "
+ 14647:             "hit_total=%" PRIu64 " "
+ 14648:             "ready_total=%" PRIu64 " "
+ 14649:             "useful_total=%" PRIu64 " "
+ 14650:             "any_useful=%" PRIu64 " "
+ 14651:             "no_slot=%" PRIu64 " "
+ 14652:             "errors=%" PRIu64 "\n",
+ 14653:             (unsigned)il,
+ 14654:             slot->budget,
+ 14655:             slot->predicted[0],
+ 14656:             slot->predicted[1],
+ 14657:             slot->predicted[2],
+ 14658:             pred_hits,
+ 14659:             ready,
+ 14660:             useful,
+ 14661:             slot->pending,
+ 14662:             elapsed_ms,
+ 14663:             g_v19_aio.observations,
+ 14664:             g_v19_aio.predicted_hits,
+ 14665:             g_v19_aio.ready_pairs,
+ 14666:             g_v19_aio.useful_ready_pairs,
+ 14667:             g_v19_aio.any_useful_ready,
+ 14668:             g_v19_aio.no_slot,
+ 14669:             g_v19_aio.io_errors);
+ 14670:     }
+ 14671: 
+ 14672:     /*
+ 14673:      * V18.9B:
+ 14674:      *
+ 14675:      * Keep this slot alive across Gate/Up. It will be released
+ 14676:      * explicitly after the Gate/Up matvec has returned.
+ 14677:      */
+ 14678: }
+
+==============================================================================
+FUNCTION cpu_v19_aio_release_layer
+==============================================================================
+ 13923: cpu_v19_aio_release_layer(
+ 13924:         uint32_t il) {
+ 13925: 
+ 13926:     if (!g_v19_aio.ready) {
+ 13927:         return;
+ 13928:     }
+ 13929: 
+ 13930:     cpu_v19_aio_poll();
+ 13931: 
+ 13932:     for (int s = 0;
+ 13933:          s < V19_AIO_SLOTS;
+ 13934:          s++) {
+ 13935: 
+ 13936:         v19_aio_slot *slot =
+ 13937:             &g_v19_aio.slot[s];
+ 13938: 
+ 13939:         /*
+ 13940:          * V18.9C:
+ 13941:          * tensor_kind==2 identifies an exact Down slot.
+ 13942:          * Gate/Up release must leave it alive.
+ 13943:          */
+ 13944:         if (slot->active &&
+ 13945:             slot->nops > 0 &&
+ 13946:             slot->op[0].tensor_kind == 2) {
+ 13947: 
+ 13948:             continue;
+ 13949:         }
+ 13950: 
+ 13951: 
+ 13952:         if (!slot->active ||
+ 13953:             slot->il != il) {
+ 13954: 
+ 13955:             continue;
+ 13956:         }
+ 13957: 
+ 13958:         int consumed_ops = 0;
+ 13959:         int consumed_pairs = 0;
+ 13960: 
+ 13961:         for (int p = 0;
+ 13962:              p < slot->budget;
+ 13963:              p++) {
+ 13964: 
+ 13965:             bool gate = false;
+ 13966:             bool up = false;
+ 13967: 
+ 13968:             for (int i = 0;
+ 13969:                  i < slot->nops;
+ 13970:                  i++) {
+ 13971: 
+ 13972:                 const v19_aio_op *op =
+ 13973:                     &slot->op[i];
+ 13974: 
+ 13975:                 if (!op->consumed ||
+ 13976:                     op->pred_index != p) {
+ 13977: 
+ 13978:                     continue;
+ 13979:                 }
+ 13980: 
+ 13981:                 consumed_ops++;
+ 13982: 
+ 13983:                 if (op->tensor_kind == 0) {
+ 13984:                     gate = true;
+ 13985:                 }
+ 13986: 
+ 13987:                 if (op->tensor_kind == 1) {
+ 13988:                     up = true;
+ 13989:                 }
+ 13990:             }
+ 13991: 
+ 13992:             if (gate && up) {
+ 13993:                 consumed_pairs++;
+ 13994:             }
+ 13995:         }
+ 13996: 
+ 13997:         if (consumed_pairs > 0) {
+ 13998:             g_v19_aio.consume_pairs +=
+ 13999:                 (uint64_t)consumed_pairs;
+ 14000: 
+ 14001:             g_v19_aio.consume_layers++;
+ 14002:         }
+ 14003: 
+ 14004:         slot->released = true;
+ 14005: 
+ 14006:         if (cpu_v19_aio_trace() ||
+ 14007:             cpu_v19_aio_consume_trace()) {
+ 14008: 
+ 14009:             fprintf(
+ 14010:                 stderr,
+ 14011:                 "ds4: v19 direct release "
+ 14012:                 "il=%u budget=%d "
+ 14013:                 "consumed_ops=%d "
+ 14014:                 "consumed_pairs=%d "
+ 14015:                 "pending=%d "
+ 14016:                 "consume_hits_total=%" PRIu64 " "
+ 14017:                 "consume_pairs_total=%" PRIu64 " "
+ 14018:                 "consume_bytes_total=%" PRIu64 " "
+ 14019:                 "consume_layers_total=%" PRIu64 " "
+ 14020:                 "verify_fail=%" PRIu64 "\n",
+ 14021:                 (unsigned)il,
+ 14022:                 slot->budget,
+ 14023:                 consumed_ops,
+ 14024:                 consumed_pairs,
+ 14025:                 slot->pending,
+ 14026:                 g_v19_aio.consume_hits,
+ 14027:                 g_v19_aio.consume_pairs,
+ 14028:                 g_v19_aio.consume_bytes,
+ 14029:                 g_v19_aio.consume_layers,
+ 14030:                 g_v19_aio.consume_verify_fail);
+ 14031:         }
+ 14032: 
+ 14033:         if (slot->pending == 0) {
+ 14034:             slot->active = false;
+ 14035:         }
+ 14036: 
+ 14037:         return;
+ 14038:     }
+ 14039: }
+
+==============================================================================
+FUNCTION cpu_v19_aio_override_expert_bytes
+==============================================================================
+ 13816: cpu_v19_aio_override_expert_bytes(
+ 13817:         const ds4_model  *model,
+ 13818:         const ds4_tensor *tensor,
+ 13819:         uint32_t          expert,
+ 13820:         const uint8_t    *mmap_base,
+ 13821:         uint64_t          expert_bytes) {
+ 13822: 
+ 13823:     (void)model;
+ 13824: 
+ 13825:     if (!cpu_v19_aio_consume_enabled() ||
+ 13826:         !g_v19_aio.ready ||
+ 13827:         !tensor ||
+ 13828:         !mmap_base ||
+ 13829:         expert_bytes == 0) {
+ 13830: 
+ 13831:         return NULL;
+ 13832:     }
+ 13833: 
+ 13834:     g_v19_aio.consume_lookups++;
+ 13835: 
+ 13836:     /*
+ 13837:      * Observation immediately before Gate/Up already polls
+ 13838:      * completions. Do not perform another io_getevents syscall
+ 13839:      * here because this helper may sit on a hot pointer path.
+ 13840:      */
+ 13841:     for (int s = 0;
+ 13842:          s < V19_AIO_SLOTS;
+ 13843:          s++) {
+ 13844: 
+ 13845:         v19_aio_slot *slot =
+ 13846:             &g_v19_aio.slot[s];
+ 13847: 
+ 13848:         if (!slot->active ||
+ 13849:             !slot->observed ||
+ 13850:             slot->released) {
+ 13851: 
+ 13852:             continue;
+ 13853:         }
+ 13854: 
+ 13855:         for (int i = 0;
+ 13856:              i < slot->nops;
+ 13857:              i++) {
+ 13858: 
+ 13859:             v19_aio_op *op =
+ 13860:                 &slot->op[i];
+ 13861: 
+ 13862:             if (!op->submitted ||
+ 13863:                 !op->done ||
+ 13864:                 !op->ok ||
+ 13865:                 op->tensor != tensor ||
+ 13866:                 op->expert != (int)expert ||
+ 13867:                 op->expert_bytes != expert_bytes ||
+ 13868:                 !op->buf ||
+ 13869:                 op->data_prefix >
+ 13870:                     op->bytes ||
+ 13871:                 expert_bytes >
+ 13872:                     op->bytes -
+ 13873:                     op->data_prefix) {
+ 13874: 
+ 13875:                 continue;
+ 13876:             }
+ 13877: 
+ 13878:             const uint8_t *direct =
+ 13879:                 (const uint8_t *)op->buf +
+ 13880:                 op->data_prefix;
+ 13881: 
+ 13882:             /*
+ 13883:              * Science-only byte validation.
+ 13884:              *
+ 13885:              * This intentionally touches the mmap and therefore
+ 13886:              * MUST stay disabled during performance benchmarks.
+ 13887:              */
+ 13888:             if (cpu_v19_aio_consume_verify_enabled()) {
+ 13889: 
+ 13890:                 if (memcmp(
+ 13891:                         direct,
+ 13892:                         mmap_base,
+ 13893:                         (size_t)expert_bytes) != 0) {
+ 13894: 
+ 13895:                     g_v19_aio.consume_verify_fail++;
+ 13896: 
+ 13897:                     return NULL;
+ 13898:                 }
+ 13899:             }
+ 13900: 
+ 13901:             if (!op->consumed) {
+ 13902:                 op->consumed = true;
+ 13903: 
+ 13904:                 g_v19_aio.consume_hits++;
+ 13905: 
+ 13906:                 g_v19_aio.consume_bytes +=
+ 13907:                     expert_bytes;
+ 13908:             }
+ 13909: 
+ 13910:             return direct;
+ 13911:         }
+ 13912:     }
+ 13913: 
+ 13914:     return NULL;
+ 13915: }
+
+==============================================================================
+FUNCTION cpu_v19_down_submit
+==============================================================================
+ 14769: cpu_v19_down_submit(
+ 14770:         const ds4_model          *model,
+ 14771:         const ds4_layer_weights  *layer,
+ 14772:         uint32_t                  il,
+ 14773:         const int                *selected) {
+ 14774: 
+ 14775:     if (!cpu_v19_down_enabled() ||
+ 14776:         !model ||
+ 14777:         !layer ||
+ 14778:         !selected ||
+ 14779:         !layer->ffn_down_exps) {
+ 14780: 
+ 14781:         return;
+ 14782:     }
+ 14783: 
+ 14784:     /*
+ 14785:      * Reuse V18.9B AIO context + O_DIRECT fd.
+ 14786:      */
+ 14787:     if (!cpu_v19_aio_open(model)) {
+ 14788:         return;
+ 14789:     }
+ 14790: 
+ 14791:     /*
+ 14792:      * At this point speculative Gate/Up still owns one slot.
+ 14793:      * We expect the other slot to be available for exact Down.
+ 14794:      */
+ 14795:     v19_aio_slot *slot =
+ 14796:         cpu_v19_find_free_slot();
+ 14797: 
+ 14798:     if (!slot) {
+ 14799: 
+ 14800:         g_v19_down_no_slot++;
+ 14801: 
+ 14802:         return;
+ 14803:     }
+ 14804: 
+ 14805:     const int budget =
+ 14806:         cpu_v19_down_budget();
+ 14807: 
+ 14808:     slot->active =
+ 14809:         true;
+ 14810: 
+ 14811:     slot->observed =
+ 14812:         false;
+ 14813: 
+ 14814:     slot->released =
+ 14815:         false;
+ 14816: 
+ 14817:     slot->il =
+ 14818:         il;
+ 14819: 
+ 14820:     slot->budget =
+ 14821:         budget;
+ 14822: 
+ 14823:     slot->nops =
+ 14824:         0;
+ 14825: 
+ 14826:     slot->pending =
+ 14827:         0;
+ 14828: 
+ 14829:     slot->submit_sec =
+ 14830:         now_sec();
+ 14831: 
+ 14832:     struct iocb *list[
+ 14833:         V19_AIO_MAX_OPS];
+ 14834: 
+ 14835:     int n = 0;
+ 14836: 
+ 14837:     for (int i = 0;
+ 14838:          i < budget;
+ 14839:          i++) {
+ 14840: 
+ 14841:         if (n >= V19_AIO_MAX_OPS) {
+ 14842:             break;
+ 14843:         }
+ 14844: 
+ 14845:         const int expert =
+ 14846:             selected[i];
+ 14847: 
+ 14848:         if (expert < 0 ||
+ 14849:             expert >=
+ 14850:                 (int)DS4_N_EXPERT) {
+ 14851: 
+ 14852:             continue;
+ 14853:         }
+ 14854: 
+ 14855:         v19_aio_op *op =
+ 14856:             &slot->op[n];
+ 14857: 
+ 14858:         /*
+ 14859:          * tensor_kind=2 distinguishes exact Down from
+ 14860:          * V18.9B Gate(0) / Up(1).
+ 14861:          */
+ 14862:         if (!cpu_v19_prepare_op(
+ 14863:                 op,
+ 14864:                 model,
+ 14865:                 layer->ffn_down_exps,
+ 14866:                 expert,
+ 14867:                 i,
+ 14868:                 2)) {
+ 14869: 
+ 14870:             continue;
+ 14871:         }
+ 14872: 
+ 14873:         list[n] =
+ 14874:             &op->cb;
+ 14875: 
+ 14876:         n++;
+ 14877:     }
+ 14878: 
+ 14879:     slot->nops =
+ 14880:         n;
+ 14881: 
+ 14882:     if (n == 0) {
+ 14883: 
+ 14884:         slot->active =
+ 14885:             false;
+ 14886: 
+ 14887:         return;
+ 14888:     }
+ 14889: 
+ 14890:     errno = 0;
+ 14891: 
+ 14892:     long submitted =
+ 14893:         cpu_v19_io_submit(
+ 14894:             g_v19_aio.ctx,
+ 14895:             n,
+ 14896:             list);
+ 14897: 
+ 14898:     if (submitted < 0) {
+ 14899: 
+ 14900:         g_v19_aio.io_errors++;
+ 14901: 
+ 14902:         slot->active =
+ 14903:             false;
+ 14904: 
+ 14905:         return;
+ 14906:     }
+ 14907: 
+ 14908:     if (submitted != n) {
+ 14909:         g_v19_down_partial++;
+ 14910:     }
+ 14911: 
+ 14912:     for (int i = 0;
+ 14913:          i < n;
+ 14914:          i++) {
+ 14915: 
+ 14916:         v19_aio_op *op =
+ 14917:             &slot->op[i];
+ 14918: 
+ 14919:         if (i < submitted) {
+ 14920: 
+ 14921:             op->submitted =
+ 14922:                 true;
+ 14923: 
+ 14924:             slot->pending++;
+ 14925: 
+ 14926:             g_v19_down_ops++;
+ 14927: 
+ 14928:             g_v19_down_bytes +=
+ 14929:                 op->bytes;
+ 14930:         }
+ 14931:     }
+ 14932: 
+ 14933:     g_v19_down_batches++;
+ 14934: 
+ 14935:     if (cpu_v19_down_trace()) {
+ 14936: 
+ 14937:         fprintf(
+ 14938:             stderr,
+ 14939:             "ds4: v19c down submit "
+ 14940:             "il=%u budget=%d "
+ 14941:             "ops=%ld pending=%d "
+ 14942:             "bytes_total=%" PRIu64 " "
+ 14943:             "no_slot=%" PRIu64 " "
+ 14944:             "partial=%" PRIu64 " "
+ 14945:             "errors=%" PRIu64 "\n",
+ 14946:             (unsigned)il,
+ 14947:             budget,
+ 14948:             submitted,
+ 14949:             slot->pending,
+ 14950:             g_v19_down_bytes,
+ 14951:             g_v19_down_no_slot,
+ 14952:             g_v19_down_partial,
+ 14953:             g_v19_aio.io_errors);
+ 14954:     }
+ 14955: }
+
+==============================================================================
+FUNCTION cpu_v19_down_deadline
+==============================================================================
+ 14958: cpu_v19_down_deadline(
+ 14959:         uint32_t il) {
+ 14960: 
+ 14961:     if (!cpu_v19_down_enabled() ||
+ 14962:         !g_v19_aio.ready) {
+ 14963: 
+ 14964:         return;
+ 14965:     }
+ 14966: 
+ 14967:     /*
+ 14968:      * Non-blocking CQ poll only.
+ 14969:      */
+ 14970:     cpu_v19_aio_poll();
+ 14971: 
+ 14972:     for (int s = 0;
+ 14973:          s < V19_AIO_SLOTS;
+ 14974:          s++) {
+ 14975: 
+ 14976:         v19_aio_slot *slot =
+ 14977:             &g_v19_aio.slot[s];
+ 14978: 
+ 14979:         if (!cpu_v19_slot_is_down(slot) ||
+ 14980:             slot->released ||
+ 14981:             slot->il != il) {
+ 14982: 
+ 14983:             continue;
+ 14984:         }
+ 14985: 
+ 14986:         /*
+ 14987:          * Generic V18.9B expert override requires observed=true
+ 14988:          * before it may return a direct buffer.
+ 14989:          */
+ 14990:         slot->observed =
+ 14991:             true;
+ 14992: 
+ 14993:         int ready = 0;
+ 14994: 
+ 14995:         for (int i = 0;
+ 14996:              i < slot->nops;
+ 14997:              i++) {
+ 14998: 
+ 14999:             const v19_aio_op *op =
+ 15000:                 &slot->op[i];
+ 15001: 
+ 15002:             if (op->submitted &&
+ 15003:                 op->done &&
+ 15004:                 op->ok) {
+ 15005: 
+ 15006:                 ready++;
+ 15007:             }
+ 15008:         }
+ 15009: 
+ 15010:         g_v19_down_deadlines++;
+ 15011: 
+ 15012:         g_v19_down_ready +=
+ 15013:             (uint64_t)ready;
+ 15014: 
+ 15015:         if (cpu_v19_down_trace()) {
+ 15016: 
+ 15017:             const double elapsed_ms =
+ 15018:                 (
+ 15019:                     now_sec() -
+ 15020:                     slot->submit_sec
+ 15021:                 ) * 1000.0;
+ 15022: 
+ 15023:             fprintf(
+ 15024:                 stderr,
+ 15025:                 "ds4: v19c down deadline "
+ 15026:                 "il=%u budget=%d "
+ 15027:                 "ready=%d/%d "
+ 15028:                 "pending=%d "
+ 15029:                 "elapsed_ms=%.3f "
+ 15030:                 "records=%" PRIu64 " "
+ 15031:                 "ready_total=%" PRIu64 " "
+ 15032:                 "no_slot=%" PRIu64 " "
+ 15033:                 "errors=%" PRIu64 "\n",
+ 15034:                 (unsigned)il,
+ 15035:                 slot->budget,
+ 15036:                 ready,
+ 15037:                 slot->nops,
+ 15038:                 slot->pending,
+ 15039:                 elapsed_ms,
+ 15040:                 g_v19_down_deadlines,
+ 15041:                 g_v19_down_ready,
+ 15042:                 g_v19_down_no_slot,
+ 15043:                 g_v19_aio.io_errors);
+ 15044:         }
+ 15045: 
+ 15046:         return;
+ 15047:     }
+ 15048: }
+
+==============================================================================
+FUNCTION cpu_v19_down_release
+==============================================================================
+ 15051: cpu_v19_down_release(
+ 15052:         uint32_t il) {
+ 15053: 
+ 15054:     if (!g_v19_aio.ready) {
+ 15055:         return;
+ 15056:     }
+ 15057: 
+ 15058:     cpu_v19_aio_poll();
+ 15059: 
+ 15060:     for (int s = 0;
+ 15061:          s < V19_AIO_SLOTS;
+ 15062:          s++) {
+ 15063: 
+ 15064:         v19_aio_slot *slot =
+ 15065:             &g_v19_aio.slot[s];
+ 15066: 
+ 15067:         if (!cpu_v19_slot_is_down(slot) ||
+ 15068:             slot->il != il) {
+ 15069: 
+ 15070:             continue;
+ 15071:         }
+ 15072: 
+ 15073:         int consumed = 0;
+ 15074: 
+ 15075:         for (int i = 0;
+ 15076:              i < slot->nops;
+ 15077:              i++) {
+ 15078: 
+ 15079:             if (slot->op[i].consumed) {
+ 15080:                 consumed++;
+ 15081:             }
+ 15082:         }
+ 15083: 
+ 15084:         g_v19_down_consumed +=
+ 15085:             (uint64_t)consumed;
+ 15086: 
+ 15087:         if (consumed > 0) {
+ 15088: 
+ 15089:             g_v19_down_consume_layers++;
+ 15090:         }
+ 15091: 
+ 15092:         slot->released =
+ 15093:             true;
+ 15094: 
+ 15095:         /*
+ 15096:          * If everything is finished, recycle now.
+ 15097:          * Otherwise poll() will retire it when late AIO ends.
+ 15098:          */
+ 15099:         if (slot->pending == 0) {
+ 15100: 
+ 15101:             slot->active =
+ 15102:                 false;
+ 15103:         }
+ 15104: 
+ 15105:         if (cpu_v19_down_trace()) {
+ 15106: 
+ 15107:             fprintf(
+ 15108:                 stderr,
+ 15109:                 "ds4: v19c down release "
+ 15110:                 "il=%u budget=%d "
+ 15111:                 "consumed=%d/%d "
+ 15112:                 "pending=%d "
+ 15113:                 "consumed_total=%" PRIu64 " "
+ 15114:                 "consume_layers=%" PRIu64 " "
+ 15115:                 "verify_fail=%" PRIu64 " "
+ 15116:                 "no_slot=%" PRIu64 " "
+ 15117:                 "errors=%" PRIu64 "\n",
+ 15118:                 (unsigned)il,
+ 15119:                 slot->budget,
+ 15120:                 consumed,
+ 15121:                 slot->nops,
+ 15122:                 slot->pending,
+ 15123:                 g_v19_down_consumed,
+ 15124:                 g_v19_down_consume_layers,
+ 15125:                 g_v19_aio.consume_verify_fail,
+ 15126:                 g_v19_down_no_slot,
+ 15127:                 g_v19_aio.io_errors);
+ 15128:         }
+ 15129: 
+ 15130:         return;
+ 15131:     }
+ 15132: }
+
+==============================================================================
+FUNCTION layer_routed_moe_one_prealloc_impl
+==============================================================================
+ 12321: layer_routed_moe_one_prealloc_impl(
+ 12322:         float             * out,
+ 12323:         const ds4_model   * model,
+ 12324:         const ds4_layer_weights * layer,
+ 12325:         const float       * x,
+ 12326:         uint32_t            il,
+ 12327:         int                 token,
+ 12328:         float               clamp,
+ 12329:         float              * mid_all,
+ 12330:         block_q8_K         * xq,
+ 12331:         block_q8_K         * midq,
+ 12332:         int8_t             * q8_xq,
+ 12333:         float              * q8_xscale,
+ 12334:         int8_t             * q8_midq,
+ 12335:         float              * q8_midscale,
+ 12336:         const int          * selected_pre,
+ 12337:         const float        * expert_weight_pre) {
+ 12338:     int selected_local[DS4_MAX_EXPERT_USED];
+ 12339:     float expert_weight_local[DS4_MAX_EXPERT_USED];
+ 12340: 
+ 12341:     bool moe_io_v9 =
+ 12342:         cpu_moe_split_io_v9_enabled() &&
+ 12343:         cpu_moe_split_io_v9_pos != UINT32_MAX &&
+ 12344:         cpu_moe_split_io_v9_il == il;
+ 12345: 
+ 12346:     struct rusage moe_io_v9_prev;
+ 12347: 
+ 12348:     if (moe_io_v9 &&
+ 12349:         getrusage(RUSAGE_SELF, &moe_io_v9_prev) != 0) {
+ 12350:         moe_io_v9 = false;
+ 12351:     }
+ 12352: 
+ 12353: 
+ 12354:     const int *selected = selected_pre;
+ 12355:     const float *expert_weight = expert_weight_pre;
+ 12356:     const uint64_t expert_in_dim = layer->ffn_gate_exps->dim[0];
+ 12357:     const uint64_t down_in_dim = layer->ffn_down_exps->dim[0];
+ 12358:     const bool routed_q8_0 =
+ 12359:         layer->ffn_gate_exps->type == DS4_TENSOR_Q8_0 &&
+ 12360:         layer->ffn_up_exps->type == DS4_TENSOR_Q8_0 &&
+ 12361:         layer->ffn_down_exps->type == DS4_TENSOR_Q8_0;
+ 12362:     const bool routed_q8_k =
+ 12363:         layer->ffn_gate_exps->type == DS4_TENSOR_Q8_K &&
+ 12364:         layer->ffn_up_exps->type == DS4_TENSOR_Q8_K &&
+ 12365:         layer->ffn_down_exps->type == DS4_TENSOR_Q8_K;
+ 12366: 
+ 12367:     if (routed_q8_0) {
+ 12368:         if ((expert_in_dim % 32u) != 0) ds4_die("Q8_0 expert input is not QK8_0 aligned");
+ 12369:         if (down_in_dim != DS4_N_FF_EXP || (down_in_dim % 32u) != 0) {
+ 12370:             ds4_die("Q8_0 expert input has an unexpected layout");
+ 12371:         }
+ 12372:     } else {
+ 12373:         if (expert_in_dim % QK_K != 0) ds4_die("routed expert input is not QK_K aligned");
+ 12374:         if (down_in_dim != DS4_N_FF_EXP || down_in_dim % QK_K != 0) {
+ 12375:             ds4_die("routed expert down input has an unexpected layout");
+ 12376:         }
+ 12377:     }
+ 12378: 
+ 12379:     memset(out, 0, (size_t)DS4_N_EMBD * sizeof(out[0]));
+ 12380: 
+ 12381:     if (!selected || !expert_weight) {
+ 12382:         layer_cpu_select_experts(
+ 12383:             selected_local,
+ 12384:             expert_weight_local,
+ 12385:             model,
+ 12386:             layer,
+ 12387:             x,
+ 12388:             token);
+ 12389: 
+ 12390:         selected = selected_local;
+ 12391:         expert_weight = expert_weight_local;
+ 12392:     }
+ 12393: 
+ 12394:     /*
+ 12395:      * V18.9A feasibility deadline:
+ 12396:      * canonical selected expert IDs are now available, but Gate/Up
+ 12397:      * computation has not started yet.
+ 12398:      */
+ 12399:     cpu_v19_aio_observe(
+ 12400:         il,
+ 12401:         selected);
+ 12402: 
+ 12403:     /* V18.9C: canonical exact Down starts early. */
+ 12404:     cpu_v19_down_submit(
+ 12405:         model,
+ 12406:         layer,
+ 12407:         il,
+ 12408:         selected);
+ 12409: 
+ 12410:     /*
+ 12411:      * Staged CPU prefetch:
+ 12412:      *
+ 12413:      * Gate/Up were requested before shared-FFN execution.
+ 12414:      * Request Down only now, immediately before Gate/Up compute,
+ 12415:      * so its NVMe page-in can overlap Gate/Up work.
+ 12416:      */
+ 12417:     if (selected_pre &&
+ 12418:         cpu_expert_prefetch_enabled() &&
+ 12419:         cpu_staged_expert_prefetch_enabled()) {
+ 12420: 
+ 12421:         layer_cpu_prefetch_selected_down_experts(
+ 12422:             model,
+ 12423:             layer,
+ 12424:             selected);
+ 12425:     }
+ 12426: 
+ 12427:     if (moe_io_v9) {
+ 12428:         cpu_moe_split_io_v9_emit(
+ 12429:             "v9_routed_setup",
+ 12430:             &moe_io_v9_prev);
+ 12431:     }
+ 12432: 
+ 12433:     if (routed_q8_0) {
+ 12434:         if (!q8_xq || !q8_xscale || !q8_midq || !q8_midscale) {
+ 12435:             ds4_die("missing Q8_0 routed decode scratch");
+ 12436:         }
+ 12437:         quantize_q8_0_activation(x, q8_xq, q8_xscale, expert_in_dim);
+ 12438:         matvec_q8_0_experts_mid_prequant(mid_all, model,
+ 12439:                                          layer->ffn_gate_exps,
+ 12440:                                          layer->ffn_up_exps,
+ 12441:                                          q8_xq, q8_xscale, selected,
+ 12442:                                          expert_weight,
+ 12443:                                          DS4_N_EXPERT_USED, clamp);
+ 12444:         cpu_v19_aio_release_layer(il);
+ 12445: 
+ 12446:         const uint64_t mid_blocks = down_in_dim / 32u;
+ 12447:         for (uint32_t i = 0; i < DS4_N_EXPERT_USED; i++) {
+ 12448:             quantize_q8_0_activation(mid_all + (uint64_t)i * down_in_dim,
+ 12449:                                      q8_midq + (uint64_t)i * mid_blocks * 32u,
+ 12450:                                      q8_midscale + (uint64_t)i * mid_blocks,
+ 12451:                                      down_in_dim);
+ 12452:         }
+ 12453:         cpu_v19_down_deadline(il);
+ 12454: 
+ 12455:         matvec_q8_0_experts_accum_prequant(out, model, layer->ffn_down_exps,
+ 12456:                                            q8_midq, q8_midscale, selected,
+ 12457:                                            DS4_N_EXPERT_USED);
+ 12458: 
+ 12459:         cpu_v19_down_release(il);
+ 12460:         (void)il;
+ 12461:         return;
+ 12462:     }
+ 12463: 
+ 12464:     if (!mid_all || !xq || !midq) ds4_die("missing routed decode scratch");
+ 12465:     ds4_quantize_row_q8_K(x, xq, (int64_t)expert_in_dim);
+ 12466: 
+ 12467:     if (routed_q8_k) {
+ 12468:         matvec_q8_k_experts_mid_prequant(mid_all, model,
+ 12469:                                          layer->ffn_gate_exps,
+ 12470:                                          layer->ffn_up_exps,
+ 12471:                                          xq, selected, expert_weight,
+ 12472:                                          DS4_N_EXPERT_USED, clamp);
+ 12473:     } else {
+ 12474:         matvec_experts_mid_prequant(mid_all, model,
+ 12475:                                     layer->ffn_gate_exps,
+ 12476:                                     layer->ffn_up_exps,
+ 12477:                                     xq, selected, expert_weight,
+ 12478:                                     DS4_N_EXPERT_USED, clamp);
+ 12479:     }
+ 12480: 
+ 12481:     cpu_v19_aio_release_layer(il);
+ 12482: 
+ 12483:     if (moe_io_v9) {
+ 12484:         cpu_moe_split_io_v9_emit(
+ 12485:             "v9_routed_gate_up",
+ 12486:             &moe_io_v9_prev);
+ 12487:     }
+ 12488: 
+ 12489:     for (uint32_t i = 0; i < DS4_N_EXPERT_USED; i++) {
+ 12490:         ds4_quantize_row_q8_K(mid_all + (uint64_t)i * down_in_dim,
+ 12491:                               midq + (uint64_t)i * (down_in_dim / QK_K),
+ 12492:                               (int64_t)down_in_dim);
+ 12493:     }
+ 12494:     if (moe_io_v9) {
+ 12495:         cpu_moe_split_io_v9_emit(
+ 12496:             "v9_routed_mid_quant",
+ 12497:             &moe_io_v9_prev);
+ 12498:     }
+ 12499: 
+ 12500:     if (routed_q8_k) {
+ 12501:         cpu_v19_down_deadline(il);
+ 12502: 
+ 12503:         matvec_q8_k_experts_accum_prequant(out, model, layer->ffn_down_exps,
+ 12504:                                            midq, selected, DS4_N_EXPERT_USED);
+ 12505: 
+ 12506:         cpu_v19_down_release(il);
+ 12507:     } else {
+ 12508:         cpu_v19_down_deadline(il);
+ 12509: 
+ 12510:         matvec_experts_down_accum_prequant(out, model, layer->ffn_down_exps,
+ 12511:                                            midq, selected, DS4_N_EXPERT_USED);
+ 12512: 
+ 12513:         cpu_v19_down_release(il);
+ 12514:     }
+ 12515: 
+ 12516:     if (moe_io_v9) {
+ 12517:         cpu_moe_split_io_v9_emit(
+ 12518:             "v9_routed_down",
+ 12519:             &moe_io_v9_prev);
+ 12520:     }
+ 12521: 
+ 12522:     (void)il;
+ 12523: }

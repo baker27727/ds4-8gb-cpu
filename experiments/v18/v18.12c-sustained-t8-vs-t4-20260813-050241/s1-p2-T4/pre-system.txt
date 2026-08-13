@@ -1,0 +1,9 @@
+loadavg=6.14 3.38 3.44 1/793 1641440
+freq_min_khz=900065
+freq_mean_khz=1205460.4
+freq_max_khz=2995388
+temp=/sys/class/thermal/thermal_zone0/temp:72.000C
+temp=/sys/class/thermal/thermal_zone1/temp:60.500C
+temp=/sys/class/thermal/thermal_zone2/temp:65.000C
+core_throttle_count=4823488
+package_throttle_count=13470439

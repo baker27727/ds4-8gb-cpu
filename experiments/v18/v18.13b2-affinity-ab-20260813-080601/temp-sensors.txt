@@ -1,0 +1,5 @@
+/sys/class/hwmon/hwmon7/temp1_input
+/sys/class/hwmon/hwmon7/temp2_input
+/sys/class/hwmon/hwmon7/temp3_input
+/sys/class/hwmon/hwmon7/temp4_input
+/sys/class/hwmon/hwmon7/temp5_input
