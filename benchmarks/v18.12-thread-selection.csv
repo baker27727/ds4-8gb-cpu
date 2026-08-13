@@ -1,0 +1,12 @@
+experiment,comparison,arm,mean_s,median_s,sd_s,wins_candidate,total_pairs,paired_delta_candidate_minus_baseline_s,ci95_low_s,ci95_high_s,temperature_mean_c,core_throttle_total,package_throttle_total,output_sha256,decision
+V18.12A,thread_retune,T4,49.058,49.590,1.376,,,,,,,,,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,candidate
+V18.12A,thread_retune,T5,60.610,61.850,3.198,,,,,,,,,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,reject
+V18.12A,thread_retune,T6,55.396,57.000,2.766,,,,,,,,,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,retired_baseline
+V18.12A,thread_retune,T7,50.698,50.910,1.301,,,,,,,,,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,candidate
+V18.12A,T8_vs_T6,T8,48.388,48.780,1.128,5,5,-7.008,-9.120,-4.896,,,,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,strong_candidate
+V18.12B,T8_vs_T4,T4,49.901,50.180,1.275,,,,,,,,,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,baseline
+V18.12B,T8_vs_T4,T8,49.116,49.705,1.657,9,10,-0.785,-1.302,-0.268,,,,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,confirmed_short_run
+V18.12C,sustained_T8_vs_T4,T4,143.635,144.095,5.760,,,,,,,,,f38d5456e87b8000941cbb1f6e5090d0da47a1548515e9b42885bbf67e6d2646,baseline
+V18.12C,sustained_T8_vs_T4,T8,142.037,143.455,7.314,3,6,-1.598,-4.952,1.755,,,,f38d5456e87b8000941cbb1f6e5090d0da47a1548515e9b42885bbf67e6d2646,unresolved
+V18.12E2,qualified_sustained_T8_vs_T4,T4,132.772,132.825,0.818,,,,,,74.000,466910,1095808,f38d5456e87b8000941cbb1f6e5090d0da47a1548515e9b42885bbf67e6d2646,baseline
+V18.12E2,qualified_sustained_T8_vs_T4,T8,130.357,130.490,0.863,6,6,-2.415,-3.436,-1.394,75.833,547028,1261176,f38d5456e87b8000941cbb1f6e5090d0da47a1548515e9b42885bbf67e6d2646,confirmed_sustained

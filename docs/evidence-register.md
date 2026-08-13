@@ -36,6 +36,10 @@ This register separates verified public-release evidence from historical researc
 | E-019 | V16.8R qualified swappiness 185 vs 187 rerun | INCONCLUSIVE | Historical follow-up |
 | E-020 | V16.9 qualified swappiness 187 vs 188 direct comparison | INCONCLUSIVE | Historical follow-up |
 | E-021 | V17.4F early hash Gate/Up prefetch controlled A/B | INCONCLUSIVE | Generation-throughput optimization follow-up |
+| E-022 | V18.10 early Top-K selection | CONTROLLED | Generation-throughput runtime selection |
+| E-023 | V18.10 residual Gate/Up execution alternatives | CONTROLLED | Generation-throughput runtime selection |
+| E-024 | V18.11C Down AIO budget retune | STRONG-HISTORICAL | Runtime winner selection |
+| E-025 | V18.12 CPU thread-count selection and sustained confirmation | STRONG-HISTORICAL | Runtime winner selection |
 
 ## E-010 — Linux VM Swappiness 10 vs 100
 
@@ -2113,3 +2117,261 @@ E-021 applies only to the tested hardware, kernel, CPU/NVMe memory-constrained e
 It does not establish that early expert prefetch is universally ineffective.
 
 It establishes only that this specific V17.4 early hash Gate/Up mechanism did not demonstrate a statistically established sustained-decode improvement under the tested conditions.
+
+## E-022 — V18.10 Early Top-K Selection
+
+### Classification
+
+- Status: `CONTROLLED`
+- Research status: historical V18 branch evidence; not yet reproduced on the current public branch
+- Primary question: how many early activation-dependent experts should receive speculative AIO preparation?
+- Output parity SHA-256: `b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f`
+
+### K1 vs K2
+
+| Metric | K2 | K1 |
+|---|---:|---:|
+| Mean elapsed | 50.445 s | 52.100 s |
+| Median elapsed | 50.635 s | 52.030 s |
+| Mean filesystem input | 82,395,988 | 82,534,114 |
+| Device input | 39.358 GiB | 39.425 GiB |
+
+K1 won `0/4` paired rotations. The paired K1-minus-K2 mean delta was
+`+1.655 s`, with a 95% confidence interval of `[+0.544, +2.766] s`.
+
+K1 was therefore rejected.
+
+### K2 vs K3 Confirmation
+
+K2 mean elapsed was `52.708 s`; K3 mean elapsed was `52.509 s`.
+K3 won `6/8` pairs, but the mean paired K3-minus-K2 delta was only
+`-0.199 s`, with a 95% confidence interval of `[-1.179, +0.781] s`.
+
+The interval crosses zero, so K2 and K3 are statistically tied under this
+experiment. K3 also increased filesystem input by approximately `1.68%`
+and measured device input by approximately `1.64%`.
+
+### Layer-Masked K3 Follow-Up
+
+The layer-masked K3 variant produced a mean of `53.260 s` versus
+`53.506 s` for K2 and won `5/8` pairs. The paired mean delta was
+`-0.246 s`, with a 95% confidence interval of `[-0.912, +0.420] s`.
+
+This variant was also statistically tied with K2.
+
+### Decision and Claim Boundary
+
+K2 is retained for the V18 runtime candidate. The evidence establishes
+that K1 was slower in the tested comparison and that the tested K3
+variants did not establish a latency improvement over K2. K2 is retained
+because it avoids additional speculative I/O without giving up a
+statistically demonstrated speed advantage.
+
+This does not establish K2 as a universal optimum for other hardware,
+models, prompts, or storage devices.
+
+Sanitized numeric source:
+
+`benchmarks/v18.10-topk-selection.csv`
+
+SHA256:
+
+`7be47fb80a723cb08e43ee2af74b1c7435a1240754f3e405d56e7b64e0c38268`
+
+
+## E-023 — V18.10 Residual Gate/Up Execution Alternatives
+
+### Classification
+
+- Status: `CONTROLLED`
+- Research status: historical V18 branch evidence; not yet reproduced on the current public branch
+- Retained baseline: V18.10C granular/direct residual Gate/Up consumption
+- Output parity SHA-256: `b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f`
+
+### No-Allocation Two-Batch Alternative
+
+The retained V18.10C baseline averaged `50.370 s`.
+The no-allocation two-batch alternative averaged `55.502 s`.
+
+The two-batch alternative won `0/4` pairs. Its mean paired delta was
+`+5.132 s`, with a 95% confidence interval of `[+3.507, +6.758] s`.
+
+Major faults increased from approximately `62,867` to `100,546`, while
+filesystem input increased from approximately `82.46 million` to
+`91.57 million`.
+
+This is a statistically supported regression for the tested workload,
+so the two-batch alternative was rejected.
+
+### Residual Micro-Batch=2 Alternative
+
+The retained granular/direct baseline averaged `51.492 s`; the
+micro-batch=2 alternative averaged `53.380 s`.
+
+The alternative won `0/4` pairs and the mean paired delta was
+`+1.888 s`. The 95% confidence interval was `[-0.816, +4.591] s`.
+
+Because this interval crosses zero, the result is classified as
+inconclusive with an unfavorable observed direction rather than as a
+statistically established regression.
+
+### Decision and Claim Boundary
+
+Granular/direct residual Gate/Up consumption remains the V18 runtime
+baseline. These experiments establish that the tested two-batch approach
+regressed and that micro-batch=2 did not demonstrate an improvement.
+
+This entry does not claim that V18.10C itself was proven faster than
+every earlier residual-consumption design; it records the controlled
+alternatives for which complete comparative evidence is available.
+
+Sanitized numeric source:
+
+`benchmarks/v18.10-residual-gu.csv`
+
+SHA256:
+
+`88ff30b1521da18e73fe7f19ec59cb57dc777c5d36fc36933fc3e1cb9aaf5b82`
+
+
+## E-024 — V18.11C Down AIO Budget Retune
+
+### Classification
+
+- Status: `STRONG-HISTORICAL`
+- Research status: historical V18 branch evidence; not yet reproduced on the current public branch
+- Candidates: Down AIO budgets 4, 5, and 6
+- Output parity SHA-256: `b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f`
+
+### Results
+
+| Budget | Mean elapsed | Median |
+|---|---:|---:|
+| D4 | 53.060 s | 52.400 s |
+| D5 | 52.403 s | 52.005 s |
+| D6 | 51.663 s | 51.440 s |
+
+Against D6, D4 lost all six paired comparisons. The D4-minus-D6 mean
+delta was `+1.397 s`, with a 95% confidence interval of
+`[+0.712, +2.081] s`.
+
+D5 also lost all six comparisons. The D5-minus-D6 mean delta was
+`+0.740 s`, with a 95% confidence interval of
+`[+0.152, +1.328] s`.
+
+Both intervals exclude zero in the unfavorable direction for D4/D5.
+
+The original analysis expresses percentage "saving" from the candidate
+D4/D5 perspective against D6; the negative percentages therefore mean
+that D4 and D5 were slower, not that D6 regressed.
+
+### Decision and Claim Boundary
+
+Down AIO budget 6 is retained and the budget-retune axis is closed for
+the V18 candidate.
+
+This is historical evidence from the research branch and is not yet a
+current-public-branch performance claim.
+
+Sanitized numeric source:
+
+`benchmarks/v18.11c-down-aio-budget.csv`
+
+SHA256:
+
+`586039519408cf5de332b1c0c848b7ae03daa19963ec86822686063a9ff14042`
+
+
+## E-025 — V18.12 CPU Thread Count and Sustained Confirmation
+
+### Classification
+
+- Status: `STRONG-HISTORICAL`
+- Research status: historical V18 branch evidence; not yet reproduced on the current public branch
+- Selected worker count: 8
+- Short-run parity SHA-256: `b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f`
+- Sustained parity SHA-256: `f38d5456e87b8000941cbb1f6e5090d0da47a1548515e9b42885bbf67e6d2646`
+
+### Initial Thread Retune
+
+The five-way V18.12A sweep produced:
+
+| Threads | Mean elapsed |
+|---|---:|
+| T4 | 49.058 s |
+| T5 | 60.610 s |
+| T6 | 55.396 s |
+| T7 | 50.698 s |
+| T8 | 48.388 s |
+
+Relative to T6, T8 won `5/5` comparisons. The paired mean T8-minus-T6
+delta was `-7.008 s`, with a 95% confidence interval of
+`[-9.120, -4.896] s`. The corresponding mean elapsed reduction was
+`12.651%`.
+
+### Focused T8 vs T4 Confirmation
+
+V18.12B measured:
+
+- T4 mean: `49.901 s`
+- T8 mean: `49.116 s`
+- mean reduction: `1.573%`
+- T8 wins: `9/10`
+- mean paired T8-minus-T4 delta: `-0.785 s`
+- 95% confidence interval: `[-1.302, -0.268] s`
+
+This confirmed the short-run T8 advantage and retired T6 as the working
+thread baseline.
+
+### Sustained Follow-Up
+
+The first sustained V18.12C campaign remained unresolved:
+
+- T4 mean: `143.635 s`
+- T8 mean: `142.037 s`
+- T8 wins: `3/6`
+- paired mean delta: `-1.598 s`
+- 95% confidence interval: `[-4.952, +1.755] s`
+
+Because the interval crossed zero, V18.12C alone did not establish a
+sustained advantage.
+
+### Qualified Sustained Repetition
+
+V18.12E2 subsequently measured:
+
+- T4 mean: `132.772 s`
+- T8 mean: `130.357 s`
+- T8 mean elapsed reduction: `1.819%`
+- speedup ratio: `1.01853x`
+- T8 wins: `6/6`
+- mean paired T8-minus-T4 delta: `-2.415 s`
+- 95% confidence interval: `[-3.436, -1.394] s`
+
+The measured temperature means were `74.000 C` for T4 and `75.833 C`
+for T8. T8 also accumulated more core and package throttle counts:
+`547,028` and `1,261,176`, versus `466,910` and `1,095,808` for T4.
+
+### Thermal Qualification and Claim Boundary
+
+The E2 experiment directory is named "thermally controlled", but the
+public claim is deliberately narrower. The host experienced material
+thermal constraint and throttling during sustained testing, and T8
+carried a higher measured thermal/throttle cost.
+
+The supported conclusion is therefore:
+
+**V18.12E2 showed a statistically supported paired sustained T8 advantage
+on this thermally constrained host.**
+
+The result is not a constant-temperature benchmark and does not
+establish that eight threads will be optimal on another CPU or cooling
+configuration.
+
+Sanitized numeric source:
+
+`benchmarks/v18.12-thread-selection.csv`
+
+SHA256:
+
+`d45abfa0402a667cac0d2f52c704f46b2420c7f0aa7ee7736bc00918d66b9d8c`

@@ -1,0 +1,4 @@
+experiment,arm,mean_s,median_s,sd_s,paired_vs,paired_delta_arm_minus_d6_s,wins_arm_vs_d6,total_pairs,ci95_low_s,ci95_high_s,user_s,sys_s,major_faults,fs_inputs,device_gib,rss_kib,output_sha256,decision
+V18.11C,D4,53.060,52.400,1.771,D6,1.397,0,6,0.712,2.081,227.163,6.832,107208.667,82083540.000,39.321,7110724.667,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,reject
+V18.11C,D5,52.403,52.005,1.551,D6,0.740,0,6,0.152,1.328,225.525,5.640,82529.667,81641949.333,39.058,7104127.333,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,reject
+V18.11C,D6,51.663,51.440,1.394,D6,0.000,,,,,222.570,4.673,61627.500,82216445.333,39.267,7060214.000,b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f,retain
