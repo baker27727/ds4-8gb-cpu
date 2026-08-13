@@ -27,6 +27,10 @@
 | Process swaps | **0** |
 | Storage path | **mmap-backed NVMe demand paging** |
 
+## V18 research direction
+
+V18 extends the validated 8 GB CPU/NVMe result into runtime research: measuring weight-stationary and expert-union execution strategies for Mixture-of-Experts layers, with controlled evidence and reproducible experiment records. Performance claims remain experimental until sustained end-to-end validation is complete.
+
 ## What this fork adds
 
 1. **DeepSeek V4 Flash AProjQ4 CPU support** for GGUFs whose dense attention projections are stored as `Q4_K`.
