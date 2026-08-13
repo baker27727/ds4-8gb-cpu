@@ -1,0 +1,16 @@
+2064:        if (pthread_create(&g_pool.threads[i], NULL, ds4_worker_main, (void *)(uintptr_t)i) != 0) {
+2080:        pthread_join(g_pool.threads[i], NULL);
+25492:    const int rc = pthread_join(job->thread, NULL);
+25517:    const int rc = pthread_create(&job->thread,
+26228:        const int rc = pthread_create(&job->thread,
+26247:            const int rc = pthread_create(&job->threads[t],
+26256:                    (void)pthread_join(job->threads[j], NULL);
+26277:        rc = pthread_join(job->thread, NULL);
+26284:            const int trc = pthread_join(job->threads[t], NULL);
+26442:        const int rc = pthread_create(&job->thread,
+26461:            const int rc = pthread_create(&job->threads[t],
+26470:                    (void)pthread_join(job->threads[j], NULL);
+26491:        rc = pthread_join(job->thread, NULL);
+26498:            const int trc = pthread_join(job->threads[t], NULL);
+28826:    const int rc = pthread_create(&g_metal_graph_selected_async_load_thread,
+29024:    const int rc = pthread_create(&g_rocm_graph_batch_selected_async_load_thread,

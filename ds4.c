@@ -22,6 +22,7 @@
 #include <limits.h>
 #include <math.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -1988,8 +1989,249 @@ static ds4_thread_pool g_pool;
 static __thread int g_parallel_depth;
 static uint32_t g_requested_threads;
 
+
+/*
+ * V18.13B1 experimental CPU affinity probe.
+ *
+ * Disabled by default.
+ *
+ *   DS4_CPU_AFFINITY=slot
+ *
+ * maps compute slot N to the N-th logical CPU present in the
+ * process' original allowed CPU mask.
+ *
+ * This deliberately follows the existing slot topology:
+ *
+ *   slot 0 = caller/main thread
+ *   slot 1..N-1 = persistent worker pthreads
+ *
+ * The original caller mask is restored during thread-pool shutdown.
+ *
+ * This is a research probe, not a promoted runtime policy.
+ */
+
+static bool g_ds4_cpu_affinity_enabled = false;
+static bool g_ds4_cpu_affinity_prepared = false;
+static bool g_ds4_cpu_affinity_trace = false;
+
+static cpu_set_t g_ds4_cpu_affinity_original_main_mask;
+static bool g_ds4_cpu_affinity_original_main_mask_valid = false;
+
+static int g_ds4_cpu_affinity_cpus[CPU_SETSIZE];
+static uint32_t g_ds4_cpu_affinity_cpu_count = 0;
+
+
+static bool ds4_cpu_affinity_env_enabled(void) {
+    const char *env = getenv("DS4_CPU_AFFINITY");
+
+    return env &&
+           env[0] &&
+           strcmp(env, "0") != 0 &&
+           strcmp(env, "off") != 0 &&
+           strcmp(env, "false") != 0;
+}
+
+
+static bool ds4_cpu_affinity_trace_enabled(void) {
+    const char *env = getenv("DS4_CPU_AFFINITY_TRACE");
+
+    return env &&
+           env[0] &&
+           strcmp(env, "0") != 0;
+}
+
+
+static void ds4_cpu_affinity_prepare(uint32_t n_threads) {
+    if (g_ds4_cpu_affinity_prepared) return;
+
+    g_ds4_cpu_affinity_prepared = true;
+    g_ds4_cpu_affinity_enabled = ds4_cpu_affinity_env_enabled();
+    g_ds4_cpu_affinity_trace = ds4_cpu_affinity_trace_enabled();
+
+    if (!g_ds4_cpu_affinity_enabled) return;
+
+#ifdef __linux__
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+
+    const int rc = pthread_getaffinity_np(
+        pthread_self(),
+        sizeof(allowed),
+        &allowed
+    );
+
+    if (rc != 0) {
+        fprintf(
+            stderr,
+            "ds4: v18.13b affinity get main mask failed: %s\n",
+            strerror(rc)
+        );
+
+        g_ds4_cpu_affinity_enabled = false;
+        return;
+    }
+
+    g_ds4_cpu_affinity_original_main_mask = allowed;
+    g_ds4_cpu_affinity_original_main_mask_valid = true;
+
+    g_ds4_cpu_affinity_cpu_count = 0;
+
+    for (int cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+        if (!CPU_ISSET(cpu, &allowed)) continue;
+
+        g_ds4_cpu_affinity_cpus[
+            g_ds4_cpu_affinity_cpu_count++
+        ] = cpu;
+    }
+
+    if (g_ds4_cpu_affinity_cpu_count < n_threads) {
+        fprintf(
+            stderr,
+            "ds4: v18.13b affinity disabled: "
+            "threads=%u allowed_cpus=%u\n",
+            n_threads,
+            g_ds4_cpu_affinity_cpu_count
+        );
+
+        g_ds4_cpu_affinity_enabled = false;
+        return;
+    }
+
+    if (g_ds4_cpu_affinity_trace) {
+        fprintf(
+            stderr,
+            "ds4: v18.13b affinity prepare "
+            "threads=%u allowed=%u cpus=",
+            n_threads,
+            g_ds4_cpu_affinity_cpu_count
+        );
+
+        for (uint32_t i = 0;
+             i < g_ds4_cpu_affinity_cpu_count;
+             i++) {
+
+            fprintf(
+                stderr,
+                "%s%d",
+                i ? "," : "",
+                g_ds4_cpu_affinity_cpus[i]
+            );
+        }
+
+        fputc('\n', stderr);
+    }
+#else
+    (void)n_threads;
+
+    fprintf(
+        stderr,
+        "ds4: v18.13b affinity unavailable on this platform\n"
+    );
+
+    g_ds4_cpu_affinity_enabled = false;
+#endif
+}
+
+
+static void ds4_cpu_affinity_pin_slot(
+        uint32_t slot,
+        const char *role) {
+
+    if (!g_ds4_cpu_affinity_enabled) return;
+
+#ifdef __linux__
+    if (slot >= g_ds4_cpu_affinity_cpu_count) {
+        fprintf(
+            stderr,
+            "ds4: v18.13b affinity slot out of range "
+            "slot=%u allowed=%u\n",
+            slot,
+            g_ds4_cpu_affinity_cpu_count
+        );
+
+        return;
+    }
+
+    const int cpu = g_ds4_cpu_affinity_cpus[slot];
+
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    CPU_SET(cpu, &mask);
+
+    const int rc = pthread_setaffinity_np(
+        pthread_self(),
+        sizeof(mask),
+        &mask
+    );
+
+    if (rc != 0) {
+        fprintf(
+            stderr,
+            "ds4: v18.13b affinity pin failed "
+            "slot=%u cpu=%d role=%s error=%s\n",
+            slot,
+            cpu,
+            role ? role : "?",
+            strerror(rc)
+        );
+
+        return;
+    }
+
+    if (g_ds4_cpu_affinity_trace) {
+        fprintf(
+            stderr,
+            "ds4: v18.13b affinity pin "
+            "slot=%u cpu=%d role=%s\n",
+            slot,
+            cpu,
+            role ? role : "?"
+        );
+    }
+#else
+    (void)slot;
+    (void)role;
+#endif
+}
+
+
+static void ds4_cpu_affinity_restore_main(void) {
+    if (!g_ds4_cpu_affinity_enabled) return;
+
+#ifdef __linux__
+    if (!g_ds4_cpu_affinity_original_main_mask_valid) return;
+
+    const int rc = pthread_setaffinity_np(
+        pthread_self(),
+        sizeof(g_ds4_cpu_affinity_original_main_mask),
+        &g_ds4_cpu_affinity_original_main_mask
+    );
+
+    if (rc != 0) {
+        fprintf(
+            stderr,
+            "ds4: v18.13b affinity restore failed: %s\n",
+            strerror(rc)
+        );
+
+        return;
+    }
+
+    if (g_ds4_cpu_affinity_trace) {
+        fprintf(
+            stderr,
+            "ds4: v18.13b affinity main mask restored\n"
+        );
+    }
+#endif
+}
+
+
 static void *ds4_worker_main(void *arg) {
     const uint32_t tid = (uint32_t)(uintptr_t)arg;
+
+    ds4_cpu_affinity_pin_slot(tid, "worker");
+
     uint32_t seen_generation = 0;
 
     for (;;) {
@@ -2060,11 +2302,15 @@ static void ds4_threads_init(void) {
     g_pool.shutdown = false;
     g_pool.initialized = true;
 
+    ds4_cpu_affinity_prepare(n_threads);
+
     for (uint32_t i = 1; i < n_threads; i++) {
         if (pthread_create(&g_pool.threads[i], NULL, ds4_worker_main, (void *)(uintptr_t)i) != 0) {
             ds4_die("failed to create worker thread");
         }
     }
+
+    ds4_cpu_affinity_pin_slot(0, "caller");
 }
 
 static void ds4_threads_shutdown(void) {
@@ -2083,6 +2329,9 @@ static void ds4_threads_shutdown(void) {
     pthread_cond_destroy(&g_pool.done_cond);
     pthread_cond_destroy(&g_pool.work_cond);
     pthread_mutex_destroy(&g_pool.mutex);
+
+    ds4_cpu_affinity_restore_main();
+
     memset(&g_pool, 0, sizeof(g_pool));
 }
 

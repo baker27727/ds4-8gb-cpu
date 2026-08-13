@@ -1,0 +1,4 @@
+attempt=1 temp_c=71.0 busy_pct=0 stable=0
+attempt=2 temp_c=67.0 busy_pct=0 stable=0
+attempt=3 temp_c=63.0 busy_pct=1 stable=0
+attempt=4 temp_c=63.0 busy_pct=4 stable=1

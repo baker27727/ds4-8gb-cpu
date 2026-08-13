@@ -1,0 +1,17 @@
+CPU CORE SOCKET NODE ONLINE
+  0    0      0    0    yes
+  1    1      0    0    yes
+  2    2      0    0    yes
+  3    3      0    0    yes
+  4    0      0    0    yes
+  5    1      0    0    yes
+  6    2      0    0    yes
+  7    3      0    0    yes
+
+CPU(s):                                  8
+On-line CPU(s) list:                     0-7
+Model name:                              Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz
+Thread(s) per core:                      2
+Core(s) per socket:                      4
+Socket(s):                               1
+NUMA node0 CPU(s):                       0-7

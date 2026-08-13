@@ -1,0 +1,2 @@
+read_sectors=82100848
+device_read_gib=39.148735

@@ -1,0 +1,10 @@
+loadavg:
+5.66 4.88 4.20 1/796 1629510
+
+cpu_freq_khz_min=900173
+cpu_freq_khz_mean=1655894.8
+cpu_freq_khz_max=3201637
+
+thermal=/sys/class/thermal/thermal_zone0/temp temp_c=75.000
+thermal=/sys/class/thermal/thermal_zone1/temp temp_c=63.500
+thermal=/sys/class/thermal/thermal_zone2/temp temp_c=67.000

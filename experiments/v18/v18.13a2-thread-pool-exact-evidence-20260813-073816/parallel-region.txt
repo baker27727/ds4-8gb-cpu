@@ -1,0 +1,211 @@
+  1950	        fprintf(stderr, "ds4: failed to read %s\n", path);
+  1951	        return false;
+  1952	    }
+  1953	    return true;
+  1954	}
+  1955	
+  1956	static bool cpu_directional_steering_enabled(
+  1957	        const float *dirs,
+  1958	        float        scale);
+  1959	
+  1960	static void cpu_directional_steering_project_rows(
+  1961	        float       *x,
+  1962	        const float *dirs,
+  1963	        uint32_t     il,
+  1964	        uint32_t     rows,
+  1965	        float        scale);
+  1966	
+  1967	typedef void (*ds4_parallel_fn)(void *ctx, uint64_t row0, uint64_t row1);
+  1968	
+  1969	#define DS4_MAX_THREADS 32
+  1970	
+  1971	typedef struct {
+  1972	    pthread_t threads[DS4_MAX_THREADS];
+  1973	    pthread_mutex_t mutex;
+  1974	    pthread_cond_t work_cond;
+  1975	    pthread_cond_t done_cond;
+  1976	    uint32_t n_threads;
+  1977	    uint32_t n_workers;
+  1978	    uint32_t generation;
+  1979	    uint32_t done;
+  1980	    bool initialized;
+  1981	    bool shutdown;
+  1982	    ds4_parallel_fn fn;
+  1983	    void *ctx;
+  1984	    uint64_t n_rows;
+  1985	} ds4_thread_pool;
+  1986	
+  1987	static ds4_thread_pool g_pool;
+  1988	static __thread int g_parallel_depth;
+  1989	static uint32_t g_requested_threads;
+  1990	
+  1991	static void *ds4_worker_main(void *arg) {
+  1992	    const uint32_t tid = (uint32_t)(uintptr_t)arg;
+  1993	    uint32_t seen_generation = 0;
+  1994	
+  1995	    for (;;) {
+  1996	        pthread_mutex_lock(&g_pool.mutex);
+  1997	        while (seen_generation == g_pool.generation && !g_pool.shutdown) {
+  1998	            pthread_cond_wait(&g_pool.work_cond, &g_pool.mutex);
+  1999	        }
+  2000	        if (g_pool.shutdown) {
+  2001	            pthread_mutex_unlock(&g_pool.mutex);
+  2002	            return NULL;
+  2003	        }
+  2004	
+  2005	        seen_generation = g_pool.generation;
+  2006	        ds4_parallel_fn fn = g_pool.fn;
+  2007	        void *ctx = g_pool.ctx;
+  2008	        const uint64_t n_rows = g_pool.n_rows;
+  2009	        const uint32_t n_threads = g_pool.n_threads;
+  2010	        pthread_mutex_unlock(&g_pool.mutex);
+  2011	
+  2012	        const uint64_t rows_per_thread = (n_rows + n_threads - 1) / n_threads;
+  2013	        const uint64_t row0 = (uint64_t)tid * rows_per_thread;
+  2014	        uint64_t row1 = row0 + rows_per_thread;
+  2015	        if (row1 > n_rows) row1 = n_rows;
+  2016	        if (row0 < row1) {
+  2017	            g_parallel_depth++;
+  2018	            fn(ctx, row0, row1);
+  2019	            g_parallel_depth--;
+  2020	        }
+  2021	
+  2022	        pthread_mutex_lock(&g_pool.mutex);
+  2023	        g_pool.done++;
+  2024	        if (g_pool.done == g_pool.n_workers) {
+  2025	            pthread_cond_signal(&g_pool.done_cond);
+  2026	        }
+  2027	        pthread_mutex_unlock(&g_pool.mutex);
+  2028	    }
+  2029	}
+  2030	
+  2031	/* Create the persistent CPU worker pool.  Decode reuses these threads instead
+  2032	 * of creating pthreads in the token loop. */
+  2033	static void ds4_threads_init(void) {
+  2034	    if (g_pool.initialized) return;
+  2035	
+  2036	    pthread_once(&iq2xxs_signed_grid_once, iq2xxs_signed_grid_init);
+  2037	
+  2038	    uint32_t n_threads = 12;
+  2039	    const long online_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+  2040	    if (online_cpus > 0) {
+  2041	        n_threads = online_cpus < 12 ? (uint32_t)online_cpus : 12;
+  2042	    }
+  2043	
+  2044	    const char *env = getenv("DS4_THREADS");
+  2045	    if (env && env[0]) {
+  2046	        long v = strtol(env, NULL, 10);
+  2047	        if (v > 0) n_threads = (uint32_t)v;
+  2048	    }
+  2049	    if (g_requested_threads > 0) n_threads = g_requested_threads;
+  2050	    if (n_threads > DS4_MAX_THREADS) n_threads = DS4_MAX_THREADS;
+  2051	    if (n_threads == 0) n_threads = 1;
+  2052	
+  2053	    pthread_mutex_init(&g_pool.mutex, NULL);
+  2054	    pthread_cond_init(&g_pool.work_cond, NULL);
+  2055	    pthread_cond_init(&g_pool.done_cond, NULL);
+  2056	    g_pool.n_threads = n_threads;
+  2057	    g_pool.n_workers = n_threads > 0 ? n_threads - 1 : 0;
+  2058	    g_pool.generation = 0;
+  2059	    g_pool.done = 0;
+  2060	    g_pool.shutdown = false;
+  2061	    g_pool.initialized = true;
+  2062	
+  2063	    for (uint32_t i = 1; i < n_threads; i++) {
+  2064	        if (pthread_create(&g_pool.threads[i], NULL, ds4_worker_main, (void *)(uintptr_t)i) != 0) {
+  2065	            ds4_die("failed to create worker thread");
+  2066	        }
+  2067	    }
+  2068	}
+  2069	
+  2070	static void ds4_threads_shutdown(void) {
+  2071	    if (!g_pool.initialized) return;
+  2072	
+  2073	    pthread_mutex_lock(&g_pool.mutex);
+  2074	    g_pool.shutdown = true;
+  2075	    g_pool.generation++;
+  2076	    pthread_cond_broadcast(&g_pool.work_cond);
+  2077	    pthread_mutex_unlock(&g_pool.mutex);
+  2078	
+  2079	    for (uint32_t i = 1; i < g_pool.n_threads; i++) {
+  2080	        pthread_join(g_pool.threads[i], NULL);
+  2081	    }
+  2082	
+  2083	    pthread_cond_destroy(&g_pool.done_cond);
+  2084	    pthread_cond_destroy(&g_pool.work_cond);
+  2085	    pthread_mutex_destroy(&g_pool.mutex);
+  2086	    memset(&g_pool, 0, sizeof(g_pool));
+  2087	}
+  2088	
+  2089	/* Run a row-parallel CPU kernel, falling back to serial execution for small
+  2090	 * jobs or nested calls where spawning more work would only add latency. */
+  2091	static void ds4_parallel_for_min_rows(uint64_t n_rows, ds4_parallel_fn fn, void *ctx, uint64_t min_parallel_rows) {
+  2092	    ds4_threads_init();
+  2093	
+  2094	    if (g_parallel_depth > 0 || g_pool.n_threads <= 1 || n_rows < min_parallel_rows) {
+  2095	        fn(ctx, 0, n_rows);
+  2096	        return;
+  2097	    }
+  2098	
+  2099	    pthread_mutex_lock(&g_pool.mutex);
+  2100	    g_pool.fn = fn;
+  2101	    g_pool.ctx = ctx;
+  2102	    g_pool.n_rows = n_rows;
+  2103	    g_pool.done = 0;
+  2104	    g_pool.generation++;
+  2105	    pthread_cond_broadcast(&g_pool.work_cond);
+  2106	
+  2107	    const uint64_t rows_per_thread = (n_rows + g_pool.n_threads - 1) / g_pool.n_threads;
+  2108	    uint64_t main_row1 = rows_per_thread;
+  2109	    if (main_row1 > n_rows) main_row1 = n_rows;
+  2110	    pthread_mutex_unlock(&g_pool.mutex);
+  2111	
+  2112	    if (main_row1 > 0) {
+  2113	        g_parallel_depth++;
+  2114	        fn(ctx, 0, main_row1);
+  2115	        g_parallel_depth--;
+  2116	    }
+  2117	
+  2118	    pthread_mutex_lock(&g_pool.mutex);
+  2119	    while (g_pool.done < g_pool.n_workers) {
+  2120	        pthread_cond_wait(&g_pool.done_cond, &g_pool.mutex);
+  2121	    }
+  2122	    pthread_mutex_unlock(&g_pool.mutex);
+  2123	}
+  2124	
+  2125	static void ds4_parallel_for(uint64_t n_rows, ds4_parallel_fn fn, void *ctx) {
+  2126	    ds4_parallel_for_min_rows(n_rows, fn, ctx, 512);
+  2127	}
+  2128	
+  2129	static void cursor_error(ds4_cursor *c, const char *msg) {
+  2130	    if (c->error[0] == '\0') {
+  2131	        snprintf(c->error, sizeof(c->error), "%s at byte %" PRIu64, msg, c->pos);
+  2132	    }
+  2133	}
+  2134	
+  2135	static bool cursor_has(ds4_cursor *c, uint64_t n) {
+  2136	    if (n > c->size || c->pos > c->size - n) {
+  2137	        cursor_error(c, "truncated GGUF file");
+  2138	        return false;
+  2139	    }
+  2140	    return true;
+  2141	}
+  2142	
+  2143	static bool cursor_read(ds4_cursor *c, void *dst, uint64_t n) {
+  2144	    if (!cursor_has(c, n)) return false;
+  2145	    memcpy(dst, c->base + c->pos, (size_t)n);
+  2146	    c->pos += n;
+  2147	    return true;
+  2148	}
+  2149	
+  2150	static bool cursor_skip(ds4_cursor *c, uint64_t n) {
+  2151	    if (!cursor_has(c, n)) return false;
+  2152	    c->pos += n;
+  2153	    return true;
+  2154	}
+  2155	
+  2156	static bool cursor_u32(ds4_cursor *c, uint32_t *v) {
+  2157	    return cursor_read(c, v, sizeof(*v));
+  2158	}
+  2159	
+  2160	static bool cursor_u64(ds4_cursor *c, uint64_t *v) {

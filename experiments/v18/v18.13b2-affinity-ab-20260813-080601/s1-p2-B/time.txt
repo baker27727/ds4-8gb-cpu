@@ -1,0 +1,10 @@
+wall_s=46.76
+user_s=279.74
+sys_s=7.94
+rss_kib=7075264
+major=80757
+minor=144628
+vol_ctx=182349
+invol_ctx=8442
+fs_inputs=84866344
+fs_outputs=104

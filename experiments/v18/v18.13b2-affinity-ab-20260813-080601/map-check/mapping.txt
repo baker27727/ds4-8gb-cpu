@@ -1,0 +1,8 @@
+ds4: v18.13b affinity pin slot=0 cpu=0 role=caller
+ds4: v18.13b affinity pin slot=1 cpu=1 role=worker
+ds4: v18.13b affinity pin slot=2 cpu=2 role=worker
+ds4: v18.13b affinity pin slot=3 cpu=3 role=worker
+ds4: v18.13b affinity pin slot=4 cpu=4 role=worker
+ds4: v18.13b affinity pin slot=5 cpu=5 role=worker
+ds4: v18.13b affinity pin slot=6 cpu=6 role=worker
+ds4: v18.13b affinity pin slot=7 cpu=7 role=worker

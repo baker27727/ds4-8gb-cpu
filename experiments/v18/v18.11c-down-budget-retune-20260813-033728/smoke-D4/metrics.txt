@@ -1,0 +1,10 @@
+wall_s=14.52
+user_s=58.94
+sys_s=2.78
+major=34615
+minor=153807
+fs_inputs=23810976
+fs_outputs=680
+rss_kib=7009008
+read_sectors=23949912
+device_read_gib=11.420208

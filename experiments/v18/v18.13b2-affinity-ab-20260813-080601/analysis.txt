@@ -1,0 +1,58 @@
+============================================================================================================
+V18.13B2 — T8 DEFAULT vs T8 SLOT-PINNED
+============================================================================================================
+runs=20 pairs=10 tokens=20 threads=8
+
+ARM DEFINITIONS
+------------------------------------------------------------------------------------------------------------
+A = T8 scheduler default, DS4_CPU_AFFINITY=0
+B = T8 deterministic slot pinning, DS4_CPU_AFFINITY=slot
+
+OUTPUT PARITY
+------------------------------------------------------------------------------------------------------------
+unique hashes=1
+hash=b6cf063007cd61da094a9bf5000df2ff8ef74ba74efe658a16fd6d2de986d81f
+GLOBAL PARITY: PASS
+
+ARM SUMMARY
+------------------------------------------------------------------------------------------------------------
+A: mean=47.066s median=47.060s sd=0.724s user=286.94s sys=8.13s major=78506 rss=7098505KiB device=40.366GiB volctx=181478 involctx=7754 pretemp=61.50C posttemp=69.50C
+B: mean=47.451s median=47.585s sd=0.850s user=287.23s sys=8.14s major=77728 rss=7100839KiB device=40.299GiB volctx=180508 involctx=9045 pretemp=61.50C posttemp=69.60C
+
+PER PAIR
+------------------------------------------------------------------------------------------------------------
+seq= 1 A= 47.010s B= 46.760s B-A= -0.250s winner=B
+seq= 2 A= 46.410s B= 46.690s B-A= +0.280s winner=A
+seq= 3 A= 45.700s B= 46.030s B-A= +0.330s winner=A
+seq= 4 A= 47.110s B= 46.860s B-A= -0.250s winner=B
+seq= 5 A= 46.930s B= 47.360s B-A= +0.430s winner=A
+seq= 6 A= 46.640s B= 47.810s B-A= +1.170s winner=A
+seq= 7 A= 47.850s B= 47.970s B-A= +0.120s winner=A
+seq= 8 A= 47.340s B= 48.770s B-A= +1.430s winner=A
+seq= 9 A= 47.420s B= 48.100s B-A= +0.680s winner=A
+seq=10 A= 48.250s B= 48.160s B-A= -0.090s winner=B
+
+PRIMARY PAIRED RESULT
+------------------------------------------------------------------------------------------------------------
+A mean       : 47.066s
+B mean       : 47.451s
+B saving     : -0.818%
+speedup A/B  : 0.99189x
+B wins       : 3/10
+A wins       : 7/10
+mean B-A     : +0.385s
+paired SD    : 0.569s
+95% CI       : [-0.022, +0.792]s
+
+CAMPAIGN CONTROL
+------------------------------------------------------------------------------------------------------------
+position 1 mean : 47.320s
+position 2 mean : 47.197s
+first-half mean B-A : +0.108s
+late-half mean B-A  : +0.662s
+B-A slope/pair      : +0.070s
+
+============================================================================================================
+VERDICT
+============================================================================================================
+INCONCLUSIVE — 95% paired CI crosses zero. Do not promote pinning.
