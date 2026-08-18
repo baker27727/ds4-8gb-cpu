@@ -31,6 +31,8 @@
 
 V18 extends the validated 8 GB CPU/NVMe result into runtime research: measuring weight-stationary and expert-union execution strategies for Mixture-of-Experts layers, with controlled evidence and reproducible experiment records. Performance claims remain experimental until sustained end-to-end validation is complete.
 
+Recent research result: a controlled 8-pair test of the experimental V33 R1 expert-weight cache found a statistically supported wall-time regression on the canonical 60-token workload. The optimization was therefore rejected rather than promoted. See the evidence register.
+
 ## What this fork adds
 
 1. **DeepSeek V4 Flash AProjQ4 CPU support** for GGUFs whose dense attention projections are stored as `Q4_K`.

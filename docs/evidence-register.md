@@ -2415,3 +2415,21 @@ The reference system was an i7-8550U. Performance is hardware- and workload-spec
 ## Scope exclusion
 
 IQ2_XXS AVX2 performance work is not included in this promotion. Its controlled performance validation remains pending. No release or tag is created by this promotion.
+
+## E-026 — V33 Clean R1 expert-weight cache, 60-token paired wall-time A/B
+
+### Classification
+
+**REGRESSION**
+
+### Release relevance
+
+Rejected experimental optimization / diagnostic follow-up.
+
+### Evidence
+
+The canonical 60-token workload produced 16 valid runs in 8 predefined balanced pairs, with 8/8 complete pairs. Exact output parity was PASS. The paired statistical unit was n=8. Mean B−A was **+60.156027561 s**, with 95% paired t CI **[+56.244857128, +64.067197994] s** and mean paired speedup **−49.682685837%**.
+
+This result shows that V33 cache ON/reclaimable was reliably slower than cache OFF for the tested host/workload/protocol. It is a diagnostic negative result, not a performance optimization claim and not a causal mechanism explanation.
+
+Full sanitized evidence: [`docs/evidence/v33-r1-cache-regression.md`](evidence/v33-r1-cache-regression.md). Paired data: [`benchmarks/v33-r1-cache-60t-paired.csv`](../benchmarks/v33-r1-cache-60t-paired.csv).
